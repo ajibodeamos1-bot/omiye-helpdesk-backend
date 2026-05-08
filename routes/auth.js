@@ -62,7 +62,11 @@ router.post('/register', auth, requireRole('super_admin'), [
       'INSERT INTO users (full_name, email, password_hash, role, branch) VALUES ($1,$2,$3,$4,$5) RETURNING id, full_name, email, role, branch',
       [full_name, email, password_hash, role, branch]
     );
-    res.status(201).json({ message: 'User created', user: result.rows[0] });
+    const newUser = result.rows[0];
+    // Send welcome email with login details
+    const { sendEmail, emailTemplates } = require('../emailService');
+    sendEmail(newUser.email, emailTemplates.welcomeUser(newUser, password));
+    res.status(201).json({ message: 'User created. Welcome email sent to ' + newUser.email, user: newUser });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error' });
