@@ -99,3 +99,18 @@ router.get('/workload/ict', auth, requireRole('ict_manager', 'super_admin'), asy
 });
 
 module.exports = router;
+
+// DELETE /api/users/:id (Super Admin only)
+router.delete('/:id', auth, requireRole('super_admin'), async (req, res) => {
+  try {
+    const check = await pool.query('SELECT role FROM users WHERE id = $1', [req.params.id]);
+    if (!check.rows.length) return res.status(404).json({ message: 'User not found' });
+    if (check.rows[0].role === 'super_admin') return res.status(403).json({ message: 'Cannot delete a Super Admin account' });
+    if (req.params.id === req.user.id) return res.status(403).json({ message: 'You cannot delete your own account' });
+    await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    res.json({ message: 'User deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
