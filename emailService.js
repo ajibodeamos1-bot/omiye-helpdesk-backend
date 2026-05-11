@@ -1,17 +1,49 @@
-const nodemailer = require('nodemailer');
+const https = require('https');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: parseInt(process.env.EMAIL_PORT),
-  secure: parseInt(process.env.EMAIL_PORT) === 465,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  tls: {
-    rejectUnauthorized: false,
-  },
-});
+async function sendEmail(to, template) {
+  try {
+    const payload = JSON.stringify({
+      from: process.env.EMAIL_FROM || 'OMIYE MFB HelpDesk <onboarding@resend.dev>',
+      to: [to],
+      subject: template.subject,
+      html: template.html,
+    });
+
+    await new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: 'api.resend.com',
+        path: '/emails',
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            console.log(`📧 Email sent to ${to}`);
+            resolve(data);
+          } else {
+            console.error(`❌ Email failed to ${to}: ${data}`);
+            reject(new Error(data));
+          }
+        });
+      });
+      req.on('error', (err) => {
+        console.error(`❌ Email error to ${to}:`, err.message);
+        reject(err);
+      });
+      req.write(payload);
+      req.end();
+    });
+  } catch (err) {
+    console.error(`❌ Email failed to ${to}:`, err.message);
+    // Don't throw — email failure shouldn't crash the app
+  }
+}
 
 const emailTemplates = {
   ticketCreated: (ticket, creator) => ({
@@ -145,7 +177,7 @@ const emailTemplates = {
               <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Password</td>
                   <td style="padding:8px;border:1px solid #d4e8f5;font-weight:bold;color:#F4873A">${password}</td></tr>
               <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Your Role</td>
-                  <td style="padding:8px;border:1px solid #d4e8f5;text-transform:capitalize">${user.role.replace('_',' ')}</td></tr>
+                  <td style="padding:8px;border:1px solid #d4e8f5;text-transform:capitalize">${user.role.replace(/_/g,' ')}</td></tr>
               <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Branch</td>
                   <td style="padding:8px;border:1px solid #d4e8f5">${user.branch}</td></tr>
             </table>
@@ -166,19 +198,5 @@ const emailTemplates = {
       </div>`,
   }),
 };
-
-async function sendEmail(to, template) {
-  try {
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to,
-      subject: template.subject,
-      html: template.html,
-    });
-    console.log(`📧 Email sent to ${to}`);
-  } catch (err) {
-    console.error(`❌ Email failed to ${to}:`, err.message);
-  }
-}
 
 module.exports = { sendEmail, emailTemplates };
