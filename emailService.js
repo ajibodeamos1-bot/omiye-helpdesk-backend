@@ -122,6 +122,46 @@ const emailTemplates = {
         </div>
       </div>`,
   }),
+
+  welcomeUser: (user, password) => ({
+    subject: `Welcome to OMIYE MFB HelpDesk — Your Login Details`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+        <div style="background:#0E5F94;padding:20px;text-align:center">
+          <h1 style="color:#fff;margin:0;font-size:20px">OMIYE MFB HelpDesk</h1>
+        </div>
+        <div style="padding:24px;background:#f7fafd">
+          <h2 style="color:#1A2940">Welcome, ${user.full_name}! 👋</h2>
+          <p>Your account has been created on the OMIYE MFB Internal HelpDesk System. You can now log in using the details below.</p>
+          <div style="background:#fff;border:1px solid #D4E8F5;border-radius:8px;padding:20px;margin:20px 0">
+            <table style="width:100%;border-collapse:collapse">
+              <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold;width:140px">Website</td>
+                  <td style="padding:8px;border:1px solid #d4e8f5"><a href="${process.env.FRONTEND_URL}" style="color:#0E5F94">${process.env.FRONTEND_URL}</a></td></tr>
+              <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Email</td>
+                  <td style="padding:8px;border:1px solid #d4e8f5">${user.email}</td></tr>
+              <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Password</td>
+                  <td style="padding:8px;border:1px solid #d4e8f5;font-weight:bold;color:#F4873A">${password}</td></tr>
+              <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Your Role</td>
+                  <td style="padding:8px;border:1px solid #d4e8f5;text-transform:capitalize">${user.role.replace('_',' ')}</td></tr>
+              <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Branch</td>
+                  <td style="padding:8px;border:1px solid #d4e8f5">${user.branch}</td></tr>
+            </table>
+          </div>
+          <div style="background:#FEF1E8;border-left:4px solid #F4873A;padding:12px;border-radius:4px;margin:16px 0">
+            <strong>⚠️ Important:</strong> Please change your password immediately after your first login for security purposes.
+          </div>
+          <a href="${process.env.FRONTEND_URL}" style="display:inline-block;background:#1B8FD4;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;margin-top:8px">
+            🔐 Login to HelpDesk
+          </a>
+          <p style="margin-top:20px;font-size:12px;color:#6B8CAE">
+            If you have any issues logging in, please contact your System Administrator.
+          </p>
+        </div>
+        <div style="padding:14px;text-align:center;color:#6B8CAE;font-size:12px;background:#e8f4fc">
+          OMIYE MFB Internal HelpDesk System — Do not reply to this email
+        </div>
+      </div>`,
+  }),
 };
 
 async function sendEmail(to, template) {
@@ -135,53 +175,7 @@ async function sendEmail(to, template) {
     console.log(`📧 Email sent to ${to}`);
   } catch (err) {
     console.error(`❌ Email failed to ${to}:`, err.message);
-    // Don't throw — email failure shouldn't crash the app
   }
 }
 
 module.exports = { sendEmail, emailTemplates };
-
-// Add welcome email template to emailTemplates
-emailTemplates.welcomeUser = (user, password) => ({
-  subject: `Welcome to OMIYE MFB HelpDesk — Your Login Details`,
-  html: `
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#0E5F94;padding:20px;text-align:center">
-        <h1 style="color:#fff;margin:0;font-size:20px">OMIYE MFB HelpDesk</h1>
-      </div>
-      <div style="padding:24px;background:#f7fafd">
-        <h2 style="color:#1A2940">Welcome, ${user.full_name}! 👋</h2>
-        <p>Your account has been created on the OMIYE MFB Internal HelpDesk System. You can now log in using the details below.</p>
-        
-        <div style="background:#fff;border:1px solid #D4E8F5;border-radius:8px;padding:20px;margin:20px 0">
-          <table style="width:100%;border-collapse:collapse">
-            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold;width:140px">Website</td>
-                <td style="padding:8px;border:1px solid #d4e8f5"><a href="${process.env.FRONTEND_URL}" style="color:#0E5F94">${process.env.FRONTEND_URL}</a></td></tr>
-            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Email</td>
-                <td style="padding:8px;border:1px solid #d4e8f5">${user.email}</td></tr>
-            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Password</td>
-                <td style="padding:8px;border:1px solid #d4e8f5;font-weight:bold;color:#F4873A">${password}</td></tr>
-            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Your Role</td>
-                <td style="padding:8px;border:1px solid #d4e8f5;text-transform:capitalize">${user.role.replace('_',' ')}</td></tr>
-            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Branch</td>
-                <td style="padding:8px;border:1px solid #d4e8f5">${user.branch}</td></tr>
-          </table>
-        </div>
-
-        <div style="background:#FEF1E8;border-left:4px solid #F4873A;padding:12px;border-radius:4px;margin:16px 0">
-          <strong>⚠️ Important:</strong> Please change your password immediately after your first login for security purposes.
-        </div>
-
-        <a href="${process.env.FRONTEND_URL}" style="display:inline-block;background:#1B8FD4;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;margin-top:8px">
-          🔐 Login to HelpDesk
-        </a>
-
-        <p style="margin-top:20px;font-size:12px;color:#6B8CAE">
-          If you have any issues logging in, please contact your System Administrator.
-        </p>
-      </div>
-      <div style="padding:14px;text-align:center;color:#6B8CAE;font-size:12px;background:#e8f4fc">
-        OMIYE MFB Internal HelpDesk System — Do not reply to this email
-      </div>
-    </div>`,
-});
