@@ -158,6 +158,34 @@ const emailTemplates = {
       </div>`,
   }),
 
+  passwordReset: (user, token) => ({
+    subject: `[OMIYE MFB HelpDesk] Password Reset Request`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+        <div style="background:#0E5F94;padding:20px;text-align:center">
+          <h1 style="color:#fff;margin:0;font-size:20px">OMIYE MFB HelpDesk</h1>
+        </div>
+        <div style="padding:24px;background:#f7fafd">
+          <h2 style="color:#1A2940">🔑 Password Reset Request</h2>
+          <p>Hi ${user.full_name},</p>
+          <p>We received a request to reset your password. Click the button below to set a new password.</p>
+          <div style="text-align:center;margin:24px 0">
+            <a href="${process.env.FRONTEND_URL}/reset-password?token=${token}" 
+               style="display:inline-block;background:#F4873A;color:#fff;padding:14px 28px;text-decoration:none;border-radius:7px;font-weight:bold;font-size:15px">
+              🔐 Reset My Password
+            </a>
+          </div>
+          <div style="background:#FEF1E8;border-left:4px solid #F4873A;padding:12px;border-radius:4px;margin:16px 0">
+            <strong>⚠️ This link expires in 1 hour.</strong> If you did not request a password reset, please ignore this email.
+          </div>
+          <p style="font-size:12px;color:#6B8CAE">For security, this link can only be used once.</p>
+        </div>
+        <div style="padding:14px;text-align:center;color:#6B8CAE;font-size:12px;background:#e8f4fc">
+          OMIYE MFB Internal HelpDesk System — Do not reply to this email
+        </div>
+      </div>`,
+  }),
+
   welcomeUser: (user, password) => ({
     subject: `Welcome to OMIYE MFB HelpDesk — Your Login Details`,
     html: `
