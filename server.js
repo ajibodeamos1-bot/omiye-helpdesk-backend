@@ -27,4 +27,9 @@ app.use('/api/audit', require('./routes/audit'));
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  // Start SLA breach notifier
+  const { startSLANotifier } = require('./slaNotifier');
+  startSLANotifier();
+});
