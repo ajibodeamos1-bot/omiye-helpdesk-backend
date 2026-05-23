@@ -8,12 +8,9 @@ const { sendEmail, emailTemplates } = require('../emailService');
 
 const router = express.Router();
 
-// Multer config for file uploads
 const storage = multer.diskStorage({
   destination: 'uploads/',
-  filename: (req, file, cb) => {
-    cb(null, uuidv4() + path.extname(file.originalname));
-  },
+  filename: (req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname)),
 });
 const upload = multer({
   storage,
@@ -24,48 +21,55 @@ const upload = multer({
   },
 });
 
-// SLA hours by priority
-const SLA_HOURS = { critical: 4, high: 8, medium: 24, low: 48 };
+// Custom SLA hours per category
+const CATEGORY_SLA = {
+  'ATM Transaction Error': 96, // 4 working days
+};
+const PRIORITY_SLA = { critical: 4, high: 8, medium: 24, low: 48 };
 
-// GET /api/tickets - list tickets (role-filtered)
+function getSLAHours(category, priority) {
+  if (category === 'ATM Card Request') return null; // No SLA for card requests
+  if (CATEGORY_SLA[category]) return CATEGORY_SLA[category];
+  return PRIORITY_SLA[priority] || 24;
+}
+
+// Generate ticket number OMY-XXXX
+async function generateTicketNumber() {
+  const result = await pool.query("SELECT COUNT(*) FROM tickets");
+  const num = parseInt(result.rows[0].count) + 1;
+  return `OMY-${String(num).padStart(4, '0')}`;
+}
+
+// GET /api/tickets
 router.get('/', auth, async (req, res) => {
   try {
-    const { status, priority, category, branch, search, page = 1, limit = 20 } = req.query;
+    const { status, priority, category, branch, search, department, page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
+    let where = [], params = [], idx = 1;
 
-    let where = [];
-    let params = [];
-    let idx = 1;
-
-    // Role-based filtering
     if (req.user.role === 'care_rep') {
-      where.push(`t.created_by = $${idx++}`);
-      params.push(req.user.id);
+      where.push(`t.created_by = $${idx++}`); params.push(req.user.id);
+    } else if (req.user.role === 'finance_officer') {
+      where.push(`(t.created_by = $${idx++} OR t.department = 'finance')`); params.push(req.user.id);
     } else if (req.user.role === 'ict_staff') {
-      where.push(`(t.assigned_to = $${idx++} OR t.assigned_to IS NULL)`);
-      params.push(req.user.id);
+      where.push(`(t.assigned_to = $${idx++} OR t.department = 'ict' OR t.department IS NULL)`); params.push(req.user.id);
     } else if (req.user.role === 'branch_manager') {
-      where.push(`t.branch = $${idx++}`);
-      params.push(req.user.branch);
+      where.push(`t.branch = $${idx++}`); params.push(req.user.branch);
     }
 
     if (status) { where.push(`t.status = $${idx++}`); params.push(status); }
     if (priority) { where.push(`t.priority = $${idx++}`); params.push(priority); }
     if (category) { where.push(`t.category = $${idx++}`); params.push(category); }
-    if (branch && req.user.role !== 'branch_manager') { where.push(`t.branch = $${idx++}`); params.push(branch); }
+    if (department) { where.push(`t.department = $${idx++}`); params.push(department); }
     if (search) {
       where.push(`(t.subject ILIKE $${idx} OR t.ticket_number ILIKE $${idx} OR t.description ILIKE $${idx})`);
       params.push(`%${search}%`); idx++;
     }
 
     const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*) FROM tickets t ${whereClause}`, params
-    );
-
+    const countResult = await pool.query(`SELECT COUNT(*) FROM tickets t ${whereClause}`, params);
     const result = await pool.query(`
-      SELECT t.*, 
+      SELECT t.*,
         c.full_name AS created_by_name, c.email AS created_by_email,
         a.full_name AS assigned_to_name,
         CASE WHEN t.sla_deadline < NOW() AND t.status NOT IN ('resolved','closed') THEN true ELSE false END AS sla_breached
@@ -73,45 +77,34 @@ router.get('/', auth, async (req, res) => {
       LEFT JOIN users c ON t.created_by = c.id
       LEFT JOIN users a ON t.assigned_to = a.id
       ${whereClause}
-      ORDER BY 
-        CASE t.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
-        t.created_at DESC
+      ORDER BY CASE t.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, t.created_at DESC
       LIMIT $${idx++} OFFSET $${idx++}
     `, [...params, limit, offset]);
 
-    res.json({
-      tickets: result.rows,
-      total: parseInt(countResult.rows[0].count),
-      page: parseInt(page),
-      pages: Math.ceil(countResult.rows[0].count / limit),
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
+    res.json({ tickets: result.rows, total: parseInt(countResult.rows[0].count), page: parseInt(page), pages: Math.ceil(countResult.rows[0].count / limit) });
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// POST /api/tickets - create ticket
-router.post('/', auth, requireRole('care_rep', 'ict_manager', 'super_admin'), upload.array('attachments', 5), async (req, res) => {
-  const { subject, description, category, priority, branch, affected_staff } = req.body;
+// POST /api/tickets
+router.post('/', auth, requireRole('care_rep', 'ict_staff', 'ict_manager', 'finance_officer', 'super_admin'), upload.array('attachments', 5), async (req, res) => {
+  const { subject, description, category, priority, branch, affected_staff, department } = req.body;
   if (!subject || !description || !category || !priority || !branch)
     return res.status(400).json({ message: 'Missing required fields' });
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    const slaDeadline = new Date(Date.now() + (SLA_HOURS[priority] || 24) * 3600000);
+    const slaHours = getSLAHours(category, priority);
+    const slaDeadline = slaHours ? new Date(Date.now() + slaHours * 3600000) : null;
+    const ticketNumber = await generateTicketNumber();
 
     const ticketResult = await client.query(`
-      INSERT INTO tickets (subject, description, category, priority, branch, affected_staff, created_by, sla_deadline)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      RETURNING *
-    `, [subject, description, category, priority, branch, affected_staff || null, req.user.id, slaDeadline]);
+      INSERT INTO tickets (ticket_number, subject, description, category, priority, branch, affected_staff, created_by, sla_deadline, department)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *
+    `, [ticketNumber, subject, description, category, priority, branch, affected_staff || null, req.user.id, slaDeadline, department || 'ict']);
 
     const ticket = ticketResult.rows[0];
 
-    // Save attachments
     if (req.files?.length) {
       for (const file of req.files) {
         await client.query(
@@ -121,39 +114,56 @@ router.post('/', auth, requireRole('care_rep', 'ict_manager', 'super_admin'), up
       }
     }
 
-    // Audit log
-    await client.query(
-      'INSERT INTO audit_logs (ticket_id, user_id, action) VALUES ($1,$2,$3)',
-      [ticket.id, req.user.id, 'Ticket created']
-    );
-
+    await client.query('INSERT INTO audit_logs (ticket_id, user_id, action) VALUES ($1,$2,$3)', [ticket.id, req.user.id, 'Ticket created']);
     await client.query('COMMIT');
 
-    // Fetch creator info
     const creatorResult = await pool.query('SELECT full_name, email FROM users WHERE id = $1', [req.user.id]);
     const creator = creatorResult.rows[0];
 
-    // Notify ICT staff + ICT manager
-    const ictResult = await pool.query(
-      "SELECT email FROM users WHERE role IN ('ict_staff','ict_manager') AND is_active = true"
-    );
-    for (const u of ictResult.rows) {
-      sendEmail(u.email, emailTemplates.ticketCreated(ticket, creator));
-    }
-    // Confirm to creator
+    const deptRole = department === 'finance' ? "'finance_officer'" : "'ict_staff','ict_manager'";
+    const staffResult = await pool.query(`SELECT email FROM users WHERE role IN (${deptRole}) AND is_active = true`);
+    for (const u of staffResult.rows) sendEmail(u.email, emailTemplates.ticketCreated(ticket, creator));
     sendEmail(creator.email, emailTemplates.ticketConfirmation(ticket, creator));
 
     res.status(201).json({ message: 'Ticket created', ticket });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  } finally {
-    client.release();
-  }
+    console.error(err); res.status(500).json({ message: 'Server error' });
+  } finally { client.release(); }
 });
 
-// GET /api/tickets/:id - get single ticket with comments & attachments
+// GET /api/tickets/stats/dashboard
+router.get('/stats/dashboard', auth, async (req, res) => {
+  try {
+    let filter = '', params = [];
+    if (req.user.role === 'care_rep') { filter = 'WHERE created_by = $1'; params = [req.user.id]; }
+    else if (req.user.role === 'finance_officer') { filter = "WHERE (created_by = $1 OR department = 'finance')"; params = [req.user.id]; }
+    else if (req.user.role === 'branch_manager') { filter = 'WHERE branch = $1'; params = [req.user.branch]; }
+    else if (req.user.role === 'ict_staff') { filter = "WHERE (assigned_to = $1 OR department = 'ict' OR department IS NULL)"; params = [req.user.id]; }
+
+    const [open, inprog, resolvedToday, slaBreach, byStatus, byPriority, byCategory] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status NOT IN ('resolved','closed')" : "WHERE status NOT IN ('resolved','closed')"}`, params),
+      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'in_progress'" : "WHERE status = 'in_progress'"}`, params),
+      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'resolved' AND resolved_at >= CURRENT_DATE" : "WHERE status = 'resolved' AND resolved_at >= CURRENT_DATE"}`, params),
+      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND sla_deadline < NOW() AND status NOT IN ('resolved','closed')" : "WHERE sla_deadline < NOW() AND status NOT IN ('resolved','closed')"}`, params),
+      pool.query(`SELECT status, COUNT(*) as count FROM tickets ${filter} GROUP BY status`, params),
+      pool.query(`SELECT priority, COUNT(*) as count FROM tickets ${filter} GROUP BY priority`, params),
+      pool.query(`SELECT category, COUNT(*) as count FROM tickets ${filter} GROUP BY category ORDER BY count DESC LIMIT 6`, params),
+    ]);
+
+    res.json({
+      open: parseInt(open.rows[0].count),
+      in_progress: parseInt(inprog.rows[0].count),
+      resolved_today: parseInt(resolvedToday.rows[0].count),
+      sla_breached: parseInt(slaBreach.rows[0].count),
+      by_status: byStatus.rows,
+      by_priority: byPriority.rows,
+      by_category: byCategory.rows,
+    });
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
+});
+
+// GET /api/tickets/:id
 router.get('/:id', auth, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -170,14 +180,10 @@ router.get('/:id', auth, async (req, res) => {
     if (!result.rows.length) return res.status(404).json({ message: 'Ticket not found' });
     const ticket = result.rows[0];
 
-    // Role check
     if (req.user.role === 'care_rep' && ticket.created_by !== req.user.id)
       return res.status(403).json({ message: 'Access denied' });
-    if (req.user.role === 'branch_manager' && ticket.branch !== req.user.branch)
-      return res.status(403).json({ message: 'Access denied' });
 
-    // Comments (hide internal from care_rep)
-    const commentsQuery = req.user.role === 'care_rep'
+    const commentsQuery = (req.user.role === 'care_rep' || req.user.role === 'finance_officer')
       ? 'SELECT cm.*, u.full_name AS author_name, u.role AS author_role FROM comments cm LEFT JOIN users u ON cm.author_id = u.id WHERE cm.ticket_id = $1 AND cm.is_internal = false ORDER BY cm.created_at'
       : 'SELECT cm.*, u.full_name AS author_name, u.role AS author_role FROM comments cm LEFT JOIN users u ON cm.author_id = u.id WHERE cm.ticket_id = $1 ORDER BY cm.created_at';
 
@@ -188,25 +194,20 @@ router.get('/:id', auth, async (req, res) => {
     ]);
 
     res.json({ ...ticket, comments: comments.rows, attachments: attachments.rows, audit: audit.rows });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// PUT /api/tickets/:id - update ticket (status, assign, priority)
-router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'super_admin'), async (req, res) => {
-  const { status, assigned_to, priority } = req.body;
+// PUT /api/tickets/:id
+router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'finance_officer', 'super_admin'), async (req, res) => {
+  const { status, assigned_to, priority, comment, is_internal } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     const prev = await client.query('SELECT * FROM tickets WHERE id = $1', [req.params.id]);
     if (!prev.rows.length) return res.status(404).json({ message: 'Ticket not found' });
     const old = prev.rows[0];
 
-    const updates = [];
-    const params = [];
+    const updates = [], params = [];
     let idx = 1;
     const auditActions = [];
 
@@ -226,25 +227,28 @@ router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'super_admin'),
       auditActions.push({ action: `Priority changed: ${old.priority} → ${priority}`, old_value: old.priority, new_value: priority });
     }
 
-    if (!updates.length) return res.status(400).json({ message: 'No changes provided' });
-
-    params.push(req.params.id);
-    const updated = await client.query(
-      `UPDATE tickets SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
-      params
-    );
+    let updatedTicket = old;
+    if (updates.length) {
+      params.push(req.params.id);
+      const updated = await client.query(`UPDATE tickets SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`, params);
+      updatedTicket = updated.rows[0];
+    }
 
     for (const log of auditActions) {
-      await client.query(
-        'INSERT INTO audit_logs (ticket_id, user_id, action, old_value, new_value) VALUES ($1,$2,$3,$4,$5)',
-        [req.params.id, req.user.id, log.action, log.old_value, log.new_value]
-      );
+      await client.query('INSERT INTO audit_logs (ticket_id, user_id, action, old_value, new_value) VALUES ($1,$2,$3,$4,$5)',
+        [req.params.id, req.user.id, log.action, log.old_value, log.new_value]);
+    }
+
+    if (comment && comment.trim()) {
+      const internal = is_internal && ['ict_staff','ict_manager','finance_officer','super_admin'].includes(req.user.role);
+      await client.query('INSERT INTO comments (ticket_id, author_id, content, is_internal) VALUES ($1,$2,$3,$4)',
+        [req.params.id, req.user.id, comment.trim(), internal]);
+      await client.query('INSERT INTO audit_logs (ticket_id, user_id, action) VALUES ($1,$2,$3)',
+        [req.params.id, req.user.id, internal ? 'Internal note added' : 'Public reply posted']);
     }
 
     await client.query('COMMIT');
-    const ticket = updated.rows[0];
 
-    // Email creator on status change
     if (status && status !== old.status) {
       const [creatorRes, updaterRes] = await Promise.all([
         pool.query('SELECT full_name, email FROM users WHERE id=$1', [old.created_by]),
@@ -253,103 +257,19 @@ router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'super_admin'),
       const creator = creatorRes.rows[0];
       const updater = updaterRes.rows[0];
       if (creator) {
-        const actionLabel = status === 'resolved' ? 'Ticket Resolved ✅' : status === 'in_progress' ? 'ICT is now working on your ticket' : `Status updated to: ${status.replace('_',' ')}`;
         if (status === 'resolved') {
-          sendEmail(creator.email, emailTemplates.ticketResolved(ticket, updater, null));
+          sendEmail(creator.email, emailTemplates.ticketResolved(updatedTicket, updater, comment));
         } else {
-          sendEmail(creator.email, emailTemplates.ticketUpdated(ticket, updater, actionLabel, null));
+          sendEmail(creator.email, emailTemplates.ticketUpdated(updatedTicket, updater, `Status updated to: ${status.replace('_',' ')}`, comment));
         }
       }
     }
 
-    res.json({ message: 'Ticket updated', ticket });
+    res.json({ message: 'Ticket updated', ticket: updatedTicket });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  } finally {
-    client.release();
-  }
-});
-
-// POST /api/tickets/:id/comments - add comment
-router.post('/:id/comments', auth, async (req, res) => {
-  const { content, is_internal } = req.body;
-  if (!content?.trim()) return res.status(400).json({ message: 'Comment content required' });
-
-  // Only ICT/admin can post internal notes
-  const internal = is_internal && ['ict_staff','ict_manager','super_admin'].includes(req.user.role);
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-
-    const commentResult = await client.query(
-      'INSERT INTO comments (ticket_id, author_id, content, is_internal) VALUES ($1,$2,$3,$4) RETURNING *',
-      [req.params.id, req.user.id, content.trim(), internal]
-    );
-
-    await client.query(
-      'INSERT INTO audit_logs (ticket_id, user_id, action) VALUES ($1,$2,$3)',
-      [req.params.id, req.user.id, internal ? 'Internal note added' : 'Public reply posted']
-    );
-
-    await client.query('COMMIT');
-
-    // Email notifications for public comments
-    if (!internal) {
-      const ticketRes = await pool.query('SELECT t.*, u.full_name AS created_by_name, u.email AS created_by_email FROM tickets t LEFT JOIN users u ON t.created_by = u.id WHERE t.id = $1', [req.params.id]);
-      const ticket = ticketRes.rows[0];
-      const authorRes = await pool.query('SELECT full_name FROM users WHERE id=$1', [req.user.id]);
-      const author = authorRes.rows[0];
-
-      if (ticket && ['ict_staff','ict_manager','super_admin'].includes(req.user.role) && ticket.created_by_email) {
-        sendEmail(ticket.created_by_email, emailTemplates.ticketUpdated(ticket, author, 'New reply from ICT team', content));
-      }
-    }
-
-    res.status(201).json({ comment: commentResult.rows[0] });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  } finally {
-    client.release();
-  }
-});
-
-// GET /api/tickets/stats/dashboard - dashboard stats
-router.get('/stats/dashboard', auth, async (req, res) => {
-  try {
-    let filter = '';
-    let params = [];
-    if (req.user.role === 'care_rep') { filter = 'WHERE created_by = $1'; params = [req.user.id]; }
-    else if (req.user.role === 'branch_manager') { filter = 'WHERE branch = $1'; params = [req.user.branch]; }
-    else if (req.user.role === 'ict_staff') { filter = 'WHERE (assigned_to = $1 OR assigned_to IS NULL)'; params = [req.user.id]; }
-
-    const [open, inprog, resolvedToday, slaBreach, byStatus, byPriority, byCategory] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + ' AND' : 'WHERE'} status NOT IN ('resolved','closed')${filter ? '' : ''}`, params),
-      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + ' AND' : 'WHERE'} status = 'in_progress'${filter ? '' : ''}`, params),
-      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + ' AND' : 'WHERE'} status = 'resolved' AND resolved_at >= CURRENT_DATE${filter ? '' : ''}`, params),
-      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + ' AND' : 'WHERE'} sla_deadline < NOW() AND status NOT IN ('resolved','closed')${filter ? '' : ''}`, params),
-      pool.query(`SELECT status, COUNT(*) as count FROM tickets ${filter} GROUP BY status`, params),
-      pool.query(`SELECT priority, COUNT(*) as count FROM tickets ${filter} GROUP BY priority`, params),
-      pool.query(`SELECT category, COUNT(*) as count FROM tickets ${filter} GROUP BY category ORDER BY count DESC LIMIT 6`, params),
-    ]);
-
-    res.json({
-      open: parseInt(open.rows[0].count),
-      in_progress: parseInt(inprog.rows[0].count),
-      resolved_today: parseInt(resolvedToday.rows[0].count),
-      sla_breached: parseInt(slaBreach.rows[0].count),
-      by_status: byStatus.rows,
-      by_priority: byPriority.rows,
-      by_category: byCategory.rows,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error' });
-  }
+    console.error(err); res.status(500).json({ message: 'Server error' });
+  } finally { client.release(); }
 });
 
 module.exports = router;
