@@ -33,6 +33,12 @@ function getSLAHours(category, priority) {
   return PRIORITY_SLA[priority] || 24;
 }
 
+function getSLADeadline(category, priority) {
+  const hours = getSLAHours(category, priority);
+  if (!hours) return new Date('2099-12-31'); // Far future = effectively no SLA
+  return new Date(Date.now() + hours * 3600000);
+}
+
 // Generate ticket number OMY-XXXX
 async function generateTicketNumber() {
   const result = await pool.query("SELECT COUNT(*) FROM tickets");
@@ -94,8 +100,8 @@ router.post('/', auth, requireRole('care_rep', 'ict_staff', 'ict_manager', 'fina
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const slaHours = getSLAHours(category, priority);
-    const slaDeadline = slaHours ? new Date(Date.now() + slaHours * 3600000) : null;
+    const slaDeadline = getSLADeadline(category, priority);
+    const noSLA = category === 'ATM Card Request';
     const ticketNumber = await generateTicketNumber();
 
     const ticketResult = await client.query(`
