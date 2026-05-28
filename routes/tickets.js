@@ -41,9 +41,16 @@ function getSLADeadline(category, priority) {
 
 // Generate ticket number OMY-XXXX
 async function generateTicketNumber() {
-  const result = await pool.query("SELECT COUNT(*) FROM tickets");
-  const num = parseInt(result.rows[0].count) + 1;
-  return `OMY-${String(num).padStart(4, '0')}`;
+  // Use MAX to get the highest existing number to avoid duplicates
+  const result = await pool.query(
+    "SELECT ticket_number FROM tickets WHERE ticket_number LIKE 'OMY-%' ORDER BY created_at DESC LIMIT 1"
+  );
+  let num = 1;
+  if (result.rows.length > 0) {
+    const lastNum = parseInt(result.rows[0].ticket_number.replace('OMY-', '')) || 0;
+    num = lastNum + 1;
+  }
+  return 'OMY-' + String(num).padStart(4, '0');
 }
 
 // GET /api/tickets
