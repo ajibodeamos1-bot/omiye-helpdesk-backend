@@ -1,25 +1,13 @@
 const express = require('express');
-const multer = require('multer');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const { upload } = require('../cloudinary');
 const pool = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 const { sendEmail, emailTemplates } = require('../emailService');
 
 const router = express.Router();
 
-const storage = multer.diskStorage({
-  destination: 'uploads/',
-  filename: (req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname)),
-});
-const upload = multer({
-  storage,
-  limits: { fileSize: (parseInt(process.env.MAX_FILE_SIZE) || 10) * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allowed = /jpeg|jpg|png|gif|pdf|doc|docx|xls|xlsx|txt/;
-    cb(null, allowed.test(path.extname(file.originalname).toLowerCase()));
-  },
-});
+
 
 // Custom SLA hours per category
 const CATEGORY_SLA = {
@@ -120,9 +108,11 @@ router.post('/', auth, requireRole('care_rep', 'ict_staff', 'ict_manager', 'fina
 
     if (req.files?.length) {
       for (const file of req.files) {
+        const storedName = file.path || file.secure_url || file.filename;
+        const originalName = file.originalname;
         await client.query(
           'INSERT INTO attachments (ticket_id, original_name, stored_name, mime_type, file_size, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6)',
-          [ticket.id, file.originalname, file.filename, file.mimetype, file.size, req.user.id]
+          [ticket.id, originalName, storedName, file.mimetype, file.size, req.user.id]
         );
       }
     }
