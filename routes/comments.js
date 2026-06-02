@@ -1,25 +1,11 @@
 const express = require('express');
-const multer = require('multer');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
 const pool = require('../db');
 const { auth } = require('../middleware/auth');
 const { sendEmail, emailTemplates } = require('../emailService');
+const { upload } = require('../cloudinary');
 
 const router = express.Router({ mergeParams: true });
-
-const storage = multer.diskStorage({
-  destination: 'uploads/',
-  filename: (req, file, cb) => cb(null, uuidv4() + path.extname(file.originalname)),
-});
-const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    const allowed = /jpeg|jpg|png|gif|pdf|doc|docx|xls|xlsx|txt/;
-    cb(null, allowed.test(path.extname(file.originalname).toLowerCase()));
-  },
-});
 
 // POST /api/tickets/:ticketId/comments
 router.post('/', auth, upload.array('attachments', 3), async (req, res) => {
@@ -33,19 +19,19 @@ router.post('/', auth, upload.array('attachments', 3), async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    // Insert comment
     const commentResult = await client.query(
       'INSERT INTO comments (ticket_id, author_id, content, is_internal) VALUES ($1,$2,$3,$4) RETURNING *',
       [req.params.ticketId, req.user.id, content.trim(), internal]
     );
     const comment = commentResult.rows[0];
 
-    // Save attachments if any
+    // Save Cloudinary attachments
     if (req.files?.length) {
       for (const file of req.files) {
+        const storedName = file.filename || file.path || file.originalname;
         await client.query(
           'INSERT INTO attachments (ticket_id, comment_id, original_name, stored_name, mime_type, file_size, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-          [req.params.ticketId, comment.id, file.originalname, file.filename, file.mimetype, file.size, req.user.id]
+          [req.params.ticketId, comment.id, file.originalname, storedName, file.mimetype, file.size, req.user.id]
         );
       }
     }
@@ -57,7 +43,6 @@ router.post('/', auth, upload.array('attachments', 3), async (req, res) => {
 
     await client.query('COMMIT');
 
-    // Email notification if public reply
     if (!internal) {
       const ticketRes = await pool.query(
         'SELECT t.*, u.full_name AS created_by_name, u.email AS created_by_email FROM tickets t LEFT JOIN users u ON t.created_by = u.id WHERE t.id = $1',
