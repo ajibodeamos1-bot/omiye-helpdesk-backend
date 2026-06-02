@@ -10,10 +10,18 @@ cloudinary.config({
 
 const storage = new CloudinaryStorage({
   cloudinary: cloudinary,
-  params: {
-    folder: 'omiye-helpdesk',
-    resource_type: 'auto',
-    allowed_formats: ['jpg','jpeg','png','gif','pdf','doc','docx','xls','xlsx','txt'],
+  params: async (req, file) => {
+    // Use 'raw' for documents, 'image' for images
+    let resourceType = 'raw';
+    if (file.mimetype.startsWith('image/')) {
+      resourceType = 'image';
+    }
+    return {
+      folder: 'omiye-helpdesk',
+      resource_type: resourceType,
+      public_id: Date.now() + '_' + file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_'),
+      use_filename: false,
+    };
   },
 });
 
