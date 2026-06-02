@@ -9,18 +9,16 @@ cloudinary.config({
 });
 
 const storage = new CloudinaryStorage({
-  cloudinary,
+  cloudinary: cloudinary,
   params: {
     folder: 'omiye-helpdesk',
-    allowed_formats: ['jpg','jpeg','png','gif','pdf','doc','docx','xls','xlsx','txt'],
     resource_type: 'auto',
-    use_filename: true,
-    unique_filename: true,
+    allowed_formats: ['jpg','jpeg','png','gif','pdf','doc','docx','xls','xlsx','txt'],
   },
 });
 
 const upload = multer({
-  storage,
+  storage: storage,
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
