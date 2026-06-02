@@ -28,7 +28,8 @@ router.post('/', auth, upload.array('attachments', 3), async (req, res) => {
     // Save Cloudinary attachments
     if (req.files?.length) {
       for (const file of req.files) {
-        const storedName = file.filename || file.path || file.originalname;
+        // Store full Cloudinary URL for direct download
+        const storedName = file.path || file.secure_url || file.url || file.filename || file.originalname;
         await client.query(
           'INSERT INTO attachments (ticket_id, comment_id, original_name, stored_name, mime_type, file_size, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7)',
           [req.params.ticketId, comment.id, file.originalname, storedName, file.mimetype, file.size, req.user.id]
