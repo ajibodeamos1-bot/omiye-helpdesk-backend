@@ -5,7 +5,7 @@ const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
-app.set('trust proxy', 1); // Required on Render — reads real client IP from X-Forwarded-For
+app.set('trust proxy', true); // Required on Render — reads real client IP from X-Forwarded-For
 
 app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
 app.use(express.json());
