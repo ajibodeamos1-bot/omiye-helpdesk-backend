@@ -27,7 +27,7 @@ function formatCurrency(amount) {
 // GET /api/sa - list requests based on role
 router.get('/', auth, async (req, res) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
+    const { status, page = 1, limit = 20, search } = req.query;
     const offset = (page - 1) * limit;
     let where = [], params = [], idx = 1;
 
@@ -44,6 +44,11 @@ router.get('/', auth, async (req, res) => {
     // ict_manager and super_admin see all
 
     if (status) { where.push(`r.status = $${idx++}`); params.push(status); }
+
+    if (search) {
+      where.push(`(r.request_number ILIKE $${idx} OR r.account_name ILIKE $${idx} OR r.account_number ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
 
     const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
 
