@@ -27,7 +27,7 @@ router.post('/login', [
 
     await pool.query(
       'INSERT INTO login_history (user_id, ip_address) VALUES ($1, $2)',
-      [user.id, req.ip || req.headers['x-forwarded-for'] || 'unknown']
+      [user.id, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown']
     ).catch(() => {});
 
     const token = jwt.sign(
