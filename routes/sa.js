@@ -95,6 +95,41 @@ router.get('/stats', auth, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
+// GET /api/sa/report — full SA requests list for CSV/report (role-filtered)
+// IMPORTANT: must be defined before /:id to prevent Express matching 'report' as an ID
+router.get('/report', auth, requireRole('sa_initiator', 'sa_approver', 'ict_manager', 'super_admin', 'branch_manager'), async (req, res) => {
+  try {
+    let where = [], params = [], idx = 1;
+
+    if (req.user.role === 'sa_initiator') {
+      where.push(`r.initiator_id = $${idx++}`);
+      params.push(req.user.id);
+    } else if (req.user.role === 'sa_approver') {
+      where.push(`r.approver_id = $${idx++}`);
+      params.push(req.user.id);
+    } else if (req.user.role === 'branch_manager') {
+      where.push(`r.branch = $${idx++}`);
+      params.push(req.user.branch);
+    }
+    // ict_manager and super_admin see all
+
+    const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+    const result = await pool.query(`
+      SELECT r.*,
+        i.full_name AS initiator_name, i.email AS initiator_email,
+        a.full_name AS approver_name, a.email AS approver_email
+      FROM sa_requests r
+      LEFT JOIN users i ON r.initiator_id = i.id
+      LEFT JOIN users a ON r.approver_id = a.id
+      ${whereClause}
+      ORDER BY r.created_at DESC
+    `, params);
+
+    res.json({ requests: result.rows });
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
+});
+
 // POST /api/sa - create new request
 router.post('/', auth, requireRole('sa_initiator'), upload.array('attachments', 5), async (req, res) => {
   const { account_number, account_name, previous_salary_month, previous_salary_amount, amount_requested, notes, resubmitted_from } = req.body;
