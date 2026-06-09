@@ -46,13 +46,16 @@ router.get('/sa-approvers', auth, requireRole('super_admin'), async (req, res) =
 router.get('/workload', auth, requireRole('ict_manager','super_admin'), async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT u.id, u.full_name, u.role,
+      SELECT u.id, u.full_name, u.email, u.role, u.branch,
         COUNT(t.id) FILTER (WHERE t.status NOT IN ('resolved','closed')) AS active_tickets,
-        COUNT(t.id) FILTER (WHERE t.status IN ('resolved','closed')) AS resolved_tickets
+        COUNT(t.id) FILTER (WHERE t.status IN ('resolved','closed')) AS resolved_tickets,
+        COUNT(t.id) FILTER (WHERE t.sla_deadline < NOW() AND t.status NOT IN ('resolved','closed')) AS overdue_tickets,
+        ROUND(AVG(EXTRACT(EPOCH FROM (t.resolved_at - t.created_at))/3600) FILTER (WHERE t.resolved_at IS NOT NULL), 1) AS avg_resolution_hrs
       FROM users u
       LEFT JOIN tickets t ON t.assigned_to = u.id
-      WHERE u.role IN ('ict_staff','ict_manager','finance_officer')
-      GROUP BY u.id ORDER BY active_tickets DESC
+      WHERE u.role NOT IN ('sa_initiator', 'sa_approver')
+      AND u.is_active = true
+      GROUP BY u.id ORDER BY active_tickets DESC, resolved_tickets DESC
     `);
     res.json(result.rows);
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
