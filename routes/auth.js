@@ -25,9 +25,14 @@ router.post('/login', [
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ message: 'Invalid email or password' });
 
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
     await pool.query(
       'INSERT INTO login_history (user_id, ip_address) VALUES ($1, $2)',
-      [user.id, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown']
+      [user.id, ip]
+    ).catch(() => {});
+    await pool.query(
+      'INSERT INTO audit_logs (user_id, action, new_value) VALUES ($1,$2,$3)',
+      [user.id, `User login`, ip]
     ).catch(() => {});
 
     const token = jwt.sign(
