@@ -4,6 +4,7 @@ const { upload } = require('../cloudinary');
 const pool = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 const { sendEmail, emailTemplates } = require('../emailService');
+const { createNotifications } = require('../notificationHelper');
 
 const router = express.Router();
 
@@ -124,9 +125,18 @@ router.post('/', auth, requireRole('care_rep', 'ict_staff', 'ict_manager', 'fina
     const creator = creatorResult.rows[0];
 
     const deptRole = department === 'finance' ? "'finance_officer'" : "'ict_staff','ict_manager'";
-    const staffResult = await pool.query(`SELECT email FROM users WHERE role IN (${deptRole}) AND is_active = true`);
+    const staffResult = await pool.query(`SELECT id, email FROM users WHERE role IN (${deptRole}) AND is_active = true`);
+    const staffIds = staffResult.rows.map(u => u.id);
     for (const u of staffResult.rows) sendEmail(u.email, emailTemplates.ticketCreated(ticket, creator));
     sendEmail(creator.email, emailTemplates.ticketConfirmation(ticket, creator));
+
+    // Notify all relevant staff about new ticket
+    await createNotifications(
+      staffIds,
+      `New ticket ${ticket.ticket_number}: ${ticket.subject}`,
+      'ticket_update',
+      ticket.id
+    );
 
     res.status(201).json({ message: 'Ticket created', ticket });
   } catch (err) {
@@ -270,7 +280,31 @@ router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'finance_office
         } else {
           sendEmail(creator.email, emailTemplates.ticketUpdated(updatedTicket, updater, `Status updated to: ${status.replace('_',' ')}`, comment));
         }
+        // Notify ticket creator
+        await createNotifications(
+          [old.created_by],
+          `Your ticket ${updatedTicket.ticket_number} status changed to: ${status.replace(/_/g,' ')}`,
+          'ticket_update', req.params.id
+        );
       }
+    }
+
+    // Notify newly assigned staff
+    if (assigned_to && assigned_to !== old.assigned_to) {
+      await createNotifications(
+        [assigned_to],
+        `Ticket ${updatedTicket.ticket_number} has been assigned to you`,
+        'ticket_assigned', req.params.id
+      );
+    }
+
+    // Notify ticket creator of new comment
+    if (comment && comment.trim() && old.created_by !== req.user.id) {
+      await createNotifications(
+        [old.created_by],
+        `New reply on your ticket ${updatedTicket.ticket_number}`,
+        'ticket_comment', req.params.id
+      );
     }
 
     res.json({ message: 'Ticket updated', ticket: updatedTicket });
