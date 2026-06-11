@@ -21,6 +21,7 @@ app.use('/api/tickets/:ticketId/comments', require('./routes/comments'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/audit', require('./routes/audit'));
 app.use('/api/sa', require('./routes/sa'));
+app.use('/api/notifications', require('./routes/notifications'));
 
 if (!fs.existsSync('uploads')) fs.mkdirSync('uploads');
 
