@@ -3,9 +3,9 @@ const pool = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 const { upload } = require('../cloudinary');
 const { sendEmail } = require('../emailService');
-
 const { createNotifications } = require('../notificationHelper');
 
+const router = express.Router();
 
 // Generate SA request number
 async function generateSANumber() {
