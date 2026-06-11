@@ -176,6 +176,29 @@ router.get('/stats/dashboard', auth, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
+// POST /api/tickets/bulk — bulk status update
+router.post('/bulk', auth, requireRole('ict_staff','ict_manager','finance_officer','super_admin','branch_manager'), async (req, res) => {
+  const { ids, status } = req.body;
+  if (!ids || !ids.length || !status) return res.status(400).json({ message: 'ids and status required' });
+  const validStatuses = ['in_progress','awaiting_info','escalated','resolved','closed'];
+  if (!validStatuses.includes(status)) return res.status(400).json({ message: 'Invalid status' });
+  try {
+    const placeholders = ids.map((_, i) => `$${i + 2}`).join(',');
+    await pool.query(
+      `UPDATE tickets SET status = $1, updated_at = NOW() ${status === 'resolved' ? ', resolved_at = NOW()' : ''} WHERE id IN (${placeholders})`,
+      [status, ...ids]
+    );
+    // Audit log each
+    for (const id of ids) {
+      await pool.query(
+        'INSERT INTO audit_logs (ticket_id, user_id, action, new_value) VALUES ($1,$2,$3,$4)',
+        [id, req.user.id, `Bulk status update`, status]
+      ).catch(() => {});
+    }
+    res.json({ message: `${ids.length} tickets updated to ${status}` });
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
+});
+
 // GET /api/tickets/:id
 router.get('/:id', auth, async (req, res) => {
   try {
