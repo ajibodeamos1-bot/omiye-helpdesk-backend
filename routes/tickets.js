@@ -222,8 +222,13 @@ router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'finance_office
     }
     if (assigned_to !== undefined && assigned_to !== old.assigned_to) {
       updates.push(`assigned_to = $${idx++}`); params.push(assigned_to || null);
-      const assigneeName = assigned_to ? (await pool.query('SELECT full_name FROM users WHERE id=$1', [assigned_to])).rows[0]?.full_name : 'Unassigned';
-      auditActions.push({ action: `Assigned to: ${assigneeName}`, old_value: old.assigned_to, new_value: assigned_to });
+      const [newAssignee, oldAssignee] = await Promise.all([
+        assigned_to ? pool.query('SELECT full_name FROM users WHERE id=$1', [assigned_to]) : Promise.resolve({ rows: [{ full_name: 'Unassigned' }] }),
+        old.assigned_to ? pool.query('SELECT full_name FROM users WHERE id=$1', [old.assigned_to]) : Promise.resolve({ rows: [{ full_name: 'Unassigned' }] }),
+      ]);
+      const newName = newAssignee.rows[0]?.full_name || 'Unassigned';
+      const oldName = oldAssignee.rows[0]?.full_name || 'Unassigned';
+      auditActions.push({ action: `Reassigned: ${oldName} → ${newName}`, old_value: oldName, new_value: newName });
     }
     if (priority && priority !== old.priority) {
       updates.push(`priority = $${idx++}`); params.push(priority);
