@@ -4,7 +4,8 @@ const { auth, requireRole } = require('../middleware/auth');
 const { upload } = require('../cloudinary');
 const { sendEmail } = require('../emailService');
 
-const router = express.Router();
+const { createNotifications } = require('../notificationHelper');
+
 
 // Generate SA request number
 async function generateSANumber() {
@@ -320,6 +321,11 @@ router.put('/:id', auth, requireRole('sa_approver', 'ict_manager', 'super_admin'
             </div>
           </div>`
       });
+      await createNotifications(
+        [request.initiator_id],
+        `Your SA request ${request.request_number} has been ${newStatus}`,
+        'sa_update', null, req.params.id
+      );
     }
 
     res.json({ message: `Request ${newStatus} successfully` });
