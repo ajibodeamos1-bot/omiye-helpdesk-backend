@@ -7,7 +7,6 @@ const { createNotifications } = require('../notificationHelper');
 
 const router = express.Router();
 
-// Generate SA request number
 async function generateSANumber() {
   const result = await pool.query(
     "SELECT request_number FROM sa_requests WHERE request_number LIKE 'SA-%' ORDER BY created_at DESC LIMIT 1"
@@ -20,7 +19,6 @@ async function generateSANumber() {
   return 'SA-' + String(num).padStart(4, '0');
 }
 
-// Format currency
 function formatCurrency(amount) {
   return new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN' }).format(amount);
 }
@@ -42,25 +40,24 @@ router.get('/', auth, async (req, res) => {
       where.push(`r.branch = $${idx++}`);
       params.push(req.user.branch);
     }
-    // ict_manager and super_admin see all
 
     if (status) { where.push(`r.status = $${idx++}`); params.push(status); }
-
     if (search) {
       where.push(`(r.request_number ILIKE $${idx} OR r.account_name ILIKE $${idx} OR r.account_number ILIKE $${idx})`);
       params.push(`%${search}%`); idx++;
     }
 
     const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
-
     const countResult = await pool.query(`SELECT COUNT(*) FROM sa_requests r ${whereClause}`, params);
     const result = await pool.query(`
       SELECT r.*,
         i.full_name AS initiator_name, i.email AS initiator_email,
-        a.full_name AS approver_name, a.email AS approver_email
+        a.full_name AS approver_name, a.email AS approver_email,
+        bm.full_name AS bm_name
       FROM sa_requests r
       LEFT JOIN users i ON r.initiator_id = i.id
       LEFT JOIN users a ON r.approver_id = a.id
+      LEFT JOIN users bm ON r.bm_id = bm.id
       ${whereClause}
       ORDER BY r.created_at DESC
       LIMIT $${idx++} OFFSET $${idx++}
@@ -83,12 +80,14 @@ router.get('/stats', auth, async (req, res) => {
     else if (req.user.role === 'sa_approver') { filter = 'WHERE approver_id = $1'; params = [req.user.id]; }
     else if (req.user.role === 'branch_manager') { filter = 'WHERE branch = $1'; params = [req.user.branch]; }
 
-    const [total, pending, approved, declined, under_review] = await Promise.all([
+    const f = (extra) => filter ? filter + ` AND ${extra}` : `WHERE ${extra}`;
+    const [total, pending, approved, declined, under_review, bm_recommended] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM sa_requests ${filter}`, params),
-      pool.query(`SELECT COUNT(*) FROM sa_requests ${filter ? filter + " AND status='pending'" : "WHERE status='pending'"}`, params),
-      pool.query(`SELECT COUNT(*) FROM sa_requests ${filter ? filter + " AND status='approved'" : "WHERE status='approved'"}`, params),
-      pool.query(`SELECT COUNT(*) FROM sa_requests ${filter ? filter + " AND status='declined'" : "WHERE status='declined'"}`, params),
-      pool.query(`SELECT COUNT(*) FROM sa_requests ${filter ? filter + " AND status='under_review'" : "WHERE status='under_review'"}`, params),
+      pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='pending'")}`, params),
+      pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='approved'")}`, params),
+      pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='declined'")}`, params),
+      pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='under_review'")}`, params),
+      pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='bm_recommended'")}`, params),
     ]);
 
     res.json({
@@ -97,54 +96,45 @@ router.get('/stats', auth, async (req, res) => {
       approved: parseInt(approved.rows[0].count),
       declined: parseInt(declined.rows[0].count),
       under_review: parseInt(under_review.rows[0].count),
+      bm_recommended: parseInt(bm_recommended.rows[0].count),
     });
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// GET /api/sa/report — full SA requests list for CSV/report (role-filtered)
-// IMPORTANT: must be defined before /:id to prevent Express matching 'report' as an ID
+// GET /api/sa/report
 router.get('/report', auth, requireRole('sa_initiator', 'sa_approver', 'ict_manager', 'super_admin', 'branch_manager'), async (req, res) => {
   try {
     let where = [], params = [], idx = 1;
-
-    if (req.user.role === 'sa_initiator') {
-      where.push(`r.initiator_id = $${idx++}`);
-      params.push(req.user.id);
-    } else if (req.user.role === 'sa_approver') {
-      where.push(`r.approver_id = $${idx++}`);
-      params.push(req.user.id);
-    } else if (req.user.role === 'branch_manager') {
-      where.push(`r.branch = $${idx++}`);
-      params.push(req.user.branch);
-    }
-    // ict_manager and super_admin see all
+    if (req.user.role === 'sa_initiator') { where.push(`r.initiator_id = $${idx++}`); params.push(req.user.id); }
+    else if (req.user.role === 'sa_approver') { where.push(`r.approver_id = $${idx++}`); params.push(req.user.id); }
+    else if (req.user.role === 'branch_manager') { where.push(`r.branch = $${idx++}`); params.push(req.user.branch); }
 
     const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
-
     const result = await pool.query(`
       SELECT r.*,
         i.full_name AS initiator_name, i.email AS initiator_email,
-        a.full_name AS approver_name, a.email AS approver_email
+        a.full_name AS approver_name, a.email AS approver_email,
+        bm.full_name AS bm_name
       FROM sa_requests r
       LEFT JOIN users i ON r.initiator_id = i.id
       LEFT JOIN users a ON r.approver_id = a.id
+      LEFT JOIN users bm ON r.bm_id = bm.id
       ${whereClause}
       ORDER BY r.created_at DESC
     `, params);
-
     res.json({ requests: result.rows });
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// POST /api/sa - create new request
+// POST /api/sa - create new request (Initiator)
 router.post('/', auth, requireRole('sa_initiator'), upload.array('attachments', 5), async (req, res) => {
-  const { account_number, account_name, previous_salary_month, previous_salary_amount, amount_requested, notes, resubmitted_from } = req.body;
+  const { account_number, account_name, previous_salary_month, previous_salary_amount,
+    amount_requested, current_commitment, notes, resubmitted_from } = req.body;
 
   if (!account_number || !account_name || !previous_salary_month || !previous_salary_amount || !amount_requested) {
     return res.status(400).json({ message: 'All required fields must be filled' });
   }
 
-  // Get initiator's assigned approver
   const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
   const initiator = userResult.rows[0];
   if (!initiator.assigned_approver_id) {
@@ -159,17 +149,16 @@ router.post('/', auth, requireRole('sa_initiator'), upload.array('attachments', 
     const result = await client.query(`
       INSERT INTO sa_requests (
         request_number, account_number, account_name, previous_salary_month,
-        previous_salary_amount, amount_requested, branch, initiator_id,
-        approver_id, notes, resubmitted_from, status
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending') RETURNING *
+        previous_salary_amount, amount_requested, current_commitment, branch,
+        initiator_id, approver_id, notes, resubmitted_from, status
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'pending') RETURNING *
     `, [requestNumber, account_number, account_name, previous_salary_month,
         parseFloat(previous_salary_amount), parseFloat(amount_requested),
-        initiator.branch, req.user.id, initiator.assigned_approver_id,
-        notes || null, resubmitted_from || null]);
+        current_commitment || null, initiator.branch, req.user.id,
+        initiator.assigned_approver_id, notes || null, resubmitted_from || null]);
 
     const request = result.rows[0];
 
-    // Save attachments
     if (req.files?.length) {
       for (const file of req.files) {
         const storedName = file.path || file.secure_url || file.url || file.filename || file.originalname;
@@ -184,39 +173,57 @@ router.post('/', auth, requireRole('sa_initiator'), upload.array('attachments', 
       'INSERT INTO sa_audit_logs (request_id, user_id, action) VALUES ($1,$2,$3)',
       [request.id, req.user.id, resubmitted_from ? 'Request resubmitted' : 'Request created']
     );
-
     await client.query('COMMIT');
 
-    // Notify approver
-    const approverResult = await pool.query('SELECT full_name, email FROM users WHERE id = $1', [initiator.assigned_approver_id]);
-    const approver = approverResult.rows[0];
-    if (approver) {
-      sendEmail(approver.email, {
-        subject: `📋 New SA Request — ${requestNumber} from ${initiator.branch}`,
+    // Find branch manager of initiator's branch and notify them
+    const bmResult = await pool.query(
+      "SELECT id, full_name, email FROM users WHERE role = 'branch_manager' AND branch = $1 AND is_active = true LIMIT 1",
+      [initiator.branch]
+    );
+    const branchManager = bmResult.rows[0];
+
+    if (branchManager) {
+      sendEmail(branchManager.email, {
+        subject: `📋 New SA Request — ${requestNumber} awaiting your recommendation`,
         html: `
           <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
             <div style="background:#0E5F94;padding:20px;text-align:center">
               <h1 style="color:#fff;margin:0;font-size:20px">New Salary Advance Request</h1>
             </div>
             <div style="padding:24px;background:#f7fafd">
-              <p>Hi ${approver.full_name},</p>
-              <p>A new Salary Advance/Overdraft request has been submitted and requires your review.</p>
+              <p>Hi ${branchManager.full_name},</p>
+              <p>A new Salary Advance request from your branch requires your recommendation before it proceeds to the approver.</p>
               <table style="width:100%;border-collapse:collapse;margin:16px 0">
-                <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold;width:160px">Request Number</td><td style="padding:8px;border:1px solid #DAE8F5;font-weight:bold;color:#0E5F94">${requestNumber}</td></tr>
+                <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold;width:160px">Request No.</td><td style="padding:8px;border:1px solid #DAE8F5;font-weight:bold;color:#0E5F94">${requestNumber}</td></tr>
                 <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Account Name</td><td style="padding:8px;border:1px solid #DAE8F5">${account_name}</td></tr>
                 <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Account Number</td><td style="padding:8px;border:1px solid #DAE8F5">${account_number}</td></tr>
-                <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Branch</td><td style="padding:8px;border:1px solid #DAE8F5">${initiator.branch}</td></tr>
                 <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Amount Requested</td><td style="padding:8px;border:1px solid #DAE8F5;font-weight:bold">${formatCurrency(amount_requested)}</td></tr>
                 <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Previous Salary</td><td style="padding:8px;border:1px solid #DAE8F5">${previous_salary_month} — ${formatCurrency(previous_salary_amount)}</td></tr>
-                ${notes ? `<tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Notes</td><td style="padding:8px;border:1px solid #DAE8F5">${notes}</td></tr>` : ''}
+                ${current_commitment ? `<tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Current Commitment</td><td style="padding:8px;border:1px solid #DAE8F5">${current_commitment}</td></tr>` : ''}
               </table>
-              <a href="${process.env.FRONTEND_URL}/sa/${request.id}" style="display:inline-block;background:#0E5F94;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">Review Request</a>
+              <a href="${process.env.FRONTEND_URL}/sa/${request.id}" style="display:inline-block;background:#0E5F94;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">Review & Recommend</a>
             </div>
             <div style="padding:14px;text-align:center;color:#7A9AB8;font-size:12px;background:#e8f4fc">
               OMIYE MFB Internal HelpDesk — Salary Advance System
             </div>
           </div>`
       });
+      await createNotifications(
+        [branchManager.id],
+        `New SA request ${requestNumber} from ${initiator.branch} needs your recommendation`,
+        'sa_update', null, request.id
+      );
+    } else {
+      // No branch manager — notify approver directly as fallback
+      const approverResult = await pool.query('SELECT full_name, email FROM users WHERE id = $1', [initiator.assigned_approver_id]);
+      const approver = approverResult.rows[0];
+      if (approver) {
+        sendEmail(approver.email, {
+          subject: `📋 New SA Request — ${requestNumber} from ${initiator.branch}`,
+          html: `<div style="font-family:Arial,sans-serif;padding:20px"><p>Hi ${approver.full_name},</p><p>A new SA request <strong>${requestNumber}</strong> has been submitted from ${initiator.branch} and requires your approval (no branch manager assigned).</p><a href="${process.env.FRONTEND_URL}/sa/${request.id}" style="background:#0E5F94;color:#fff;padding:10px 20px;text-decoration:none;border-radius:6px;display:inline-block;margin-top:10px">View Request</a></div>`
+        });
+        await createNotifications([initiator.assigned_approver_id], `New SA request ${requestNumber} requires your approval`, 'sa_update', null, request.id);
+      }
     }
 
     res.status(201).json({ message: 'Request submitted successfully', request });
@@ -227,23 +234,24 @@ router.post('/', auth, requireRole('sa_initiator'), upload.array('attachments', 
   } finally { client.release(); }
 });
 
-// GET /api/sa/:id - get single request
+// GET /api/sa/:id
 router.get('/:id', auth, async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT r.*,
         i.full_name AS initiator_name, i.email AS initiator_email, i.branch AS initiator_branch,
-        a.full_name AS approver_name, a.email AS approver_email
+        a.full_name AS approver_name, a.email AS approver_email,
+        bm.full_name AS bm_name, bm.email AS bm_email
       FROM sa_requests r
       LEFT JOIN users i ON r.initiator_id = i.id
       LEFT JOIN users a ON r.approver_id = a.id
+      LEFT JOIN users bm ON r.bm_id = bm.id
       WHERE r.id = $1
     `, [req.params.id]);
 
     if (!result.rows.length) return res.status(404).json({ message: 'Request not found' });
     const request = result.rows[0];
 
-    // Access check
     if (req.user.role === 'sa_initiator' && request.initiator_id !== req.user.id) return res.status(403).json({ message: 'Access denied' });
     if (req.user.role === 'sa_approver' && request.approver_id !== req.user.id) return res.status(403).json({ message: 'Access denied' });
     if (req.user.role === 'branch_manager' && request.branch !== req.user.branch) return res.status(403).json({ message: 'Access denied' });
@@ -257,21 +265,89 @@ router.get('/:id', auth, async (req, res) => {
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
-// PUT /api/sa/:id - approve or decline
-router.put('/:id', auth, requireRole('sa_approver', 'ict_manager', 'super_admin'), async (req, res) => {
-  const { action, amount_approved, approver_notes, status } = req.body;
+// PUT /api/sa/:id — branch manager recommendation OR approver decision
+router.put('/:id', auth, requireRole('sa_approver', 'ict_manager', 'super_admin', 'branch_manager'), async (req, res) => {
+  const { action, amount_approved, approver_notes, bm_recommended_amount, bm_notes } = req.body;
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const prev = await client.query('SELECT * FROM sa_requests WHERE id = $1', [req.params.id]);
+    const prev = await client.query(`
+      SELECT r.*, i.full_name AS initiator_name, i.email AS initiator_email
+      FROM sa_requests r LEFT JOIN users i ON r.initiator_id = i.id
+      WHERE r.id = $1
+    `, [req.params.id]);
     if (!prev.rows.length) return res.status(404).json({ message: 'Request not found' });
     const request = prev.rows[0];
 
+    // ── Branch Manager recommends ──────────────────────────────────────
+    if (action === 'bm_recommend') {
+      if (req.user.role !== 'branch_manager') return res.status(403).json({ message: 'Only Branch Managers can recommend' });
+      if (request.branch !== req.user.branch) return res.status(403).json({ message: 'Access denied' });
+      if (!bm_recommended_amount) return res.status(400).json({ message: 'Please enter the recommended amount' });
+
+      await client.query(`
+        UPDATE sa_requests SET
+          status = 'bm_recommended',
+          bm_id = $1,
+          bm_recommended_amount = $2,
+          bm_notes = $3,
+          bm_recommended_at = NOW(),
+          updated_at = NOW()
+        WHERE id = $4
+      `, [req.user.id, parseFloat(bm_recommended_amount), bm_notes || null, req.params.id]);
+
+      await client.query(
+        'INSERT INTO sa_audit_logs (request_id, user_id, action, old_value, new_value) VALUES ($1,$2,$3,$4,$5)',
+        [req.params.id, req.user.id, 'Branch Manager recommended', request.status, 'bm_recommended']
+      );
+      await client.query('COMMIT');
+
+      // Notify the assigned approver
+      const approverResult = await pool.query('SELECT full_name, email, id FROM users WHERE id = $1', [request.approver_id]);
+      const approver = approverResult.rows[0];
+      const bmName = req.user.full_name || 'Branch Manager';
+
+      if (approver) {
+        sendEmail(approver.email, {
+          subject: `✅ BM Recommended — SA Request ${request.request_number} ready for approval`,
+          html: `
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+              <div style="background:#0E5F94;padding:20px;text-align:center">
+                <h1 style="color:#fff;margin:0;font-size:20px">SA Request Ready for Your Approval</h1>
+              </div>
+              <div style="padding:24px;background:#f7fafd">
+                <p>Hi ${approver.full_name},</p>
+                <p>The Branch Manager <strong>${bmName}</strong> has reviewed SA request <strong>${request.request_number}</strong> and submitted a recommendation.</p>
+                <table style="width:100%;border-collapse:collapse;margin:16px 0">
+                  <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold;width:180px">Request No.</td><td style="padding:8px;border:1px solid #DAE8F5;font-weight:bold;color:#0E5F94">${request.request_number}</td></tr>
+                  <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Account Name</td><td style="padding:8px;border:1px solid #DAE8F5">${request.account_name}</td></tr>
+                  <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">Amount Requested</td><td style="padding:8px;border:1px solid #DAE8F5">${formatCurrency(request.amount_requested)}</td></tr>
+                  <tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">BM Recommended Amount</td><td style="padding:8px;border:1px solid #DAE8F5;font-weight:bold;color:#0FA86A">${formatCurrency(bm_recommended_amount)}</td></tr>
+                  ${bm_notes ? `<tr><td style="padding:8px;background:#EBF5FF;font-weight:bold">BM Notes</td><td style="padding:8px;border:1px solid #DAE8F5">${bm_notes}</td></tr>` : ''}
+                </table>
+                <a href="${process.env.FRONTEND_URL}/sa/${request.id}" style="display:inline-block;background:#0E5F94;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">Approve / Decline</a>
+              </div>
+              <div style="padding:14px;text-align:center;color:#7A9AB8;font-size:12px;background:#e8f4fc">
+                OMIYE MFB Internal HelpDesk — Salary Advance System
+              </div>
+            </div>`
+        });
+        await createNotifications(
+          [approver.id],
+          `SA request ${request.request_number} has been recommended by Branch Manager — awaiting your approval`,
+          'sa_update', null, req.params.id
+        );
+      }
+
+      return res.json({ message: 'Recommendation submitted. Approver has been notified.' });
+    }
+
+    // ── Approver approves/declines ─────────────────────────────────────
     if (req.user.role === 'sa_approver' && request.approver_id !== req.user.id) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    let newStatus = status;
+    let newStatus = 'under_review';
     if (action === 'approve') newStatus = 'approved';
     if (action === 'decline') newStatus = 'declined';
     if (action === 'review') newStatus = 'under_review';
@@ -290,37 +366,36 @@ router.put('/:id', auth, requireRole('sa_approver', 'ict_manager', 'super_admin'
       'INSERT INTO sa_audit_logs (request_id, user_id, action, old_value, new_value) VALUES ($1,$2,$3,$4,$5)',
       [req.params.id, req.user.id, `Status changed to ${newStatus}`, request.status, newStatus]
     );
-
     await client.query('COMMIT');
 
     // Notify initiator
-    const initiatorResult = await pool.query('SELECT full_name, email FROM users WHERE id = $1', [request.initiator_id]);
-    const initiator = initiatorResult.rows[0];
-    const approverResult = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user.id]);
-    const approver = approverResult.rows[0];
+    const approverUser = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user.id]);
+    const approverName = approverUser.rows[0]?.full_name || 'Approver';
 
-    if (initiator && (action === 'approve' || action === 'decline')) {
+    if (action === 'approve' || action === 'decline') {
       const isApproved = action === 'approve';
-      sendEmail(initiator.email, {
-        subject: `${isApproved ? '✅ Approved' : '❌ Declined'} — SA Request ${request.request_number}`,
-        html: `
-          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-            <div style="background:${isApproved ? '#0FA86A' : '#D63A3A'};padding:20px;text-align:center">
-              <h1 style="color:#fff;margin:0;font-size:20px">${isApproved ? '✅ Request Approved' : '❌ Request Declined'}</h1>
-            </div>
-            <div style="padding:24px;background:#f7fafd">
-              <p>Hi ${initiator.full_name},</p>
-              <p>Your Salary Advance/Overdraft request <strong>${request.request_number}</strong> has been <strong>${isApproved ? 'APPROVED' : 'DECLINED'}</strong> by ${approver.full_name}.</p>
-              ${isApproved && amount_approved ? `<p style="font-size:18px;font-weight:bold;color:#0FA86A">Amount Approved: ${formatCurrency(amount_approved)}</p>` : ''}
-              ${approver_notes ? `<p><strong>Notes from Approver:</strong> ${approver_notes}</p>` : ''}
-              ${!isApproved ? `<p>You may resubmit your request if you wish to appeal.</p>` : ''}
-              <a href="${process.env.FRONTEND_URL}/sa/${request.id}" style="display:inline-block;background:#0E5F94;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">View Request</a>
-            </div>
-            <div style="padding:14px;text-align:center;color:#7A9AB8;font-size:12px;background:#e8f4fc">
-              OMIYE MFB Internal HelpDesk — Salary Advance System
-            </div>
-          </div>`
-      });
+      if (request.initiator_email) {
+        sendEmail(request.initiator_email, {
+          subject: `${isApproved ? '✅ Approved' : '❌ Declined'} — SA Request ${request.request_number}`,
+          html: `
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+              <div style="background:${isApproved ? '#0FA86A' : '#D63A3A'};padding:20px;text-align:center">
+                <h1 style="color:#fff;margin:0;font-size:20px">${isApproved ? '✅ Request Approved' : '❌ Request Declined'}</h1>
+              </div>
+              <div style="padding:24px;background:#f7fafd">
+                <p>Hi ${request.initiator_name},</p>
+                <p>Your request <strong>${request.request_number}</strong> has been <strong>${isApproved ? 'APPROVED' : 'DECLINED'}</strong> by ${approverName}.</p>
+                ${isApproved && amount_approved ? `<p style="font-size:18px;font-weight:bold;color:#0FA86A">Amount Approved: ${formatCurrency(amount_approved)}</p>` : ''}
+                ${approver_notes ? `<p><strong>Notes:</strong> ${approver_notes}</p>` : ''}
+                ${!isApproved ? `<p>You may resubmit your request if you wish to appeal.</p>` : ''}
+                <a href="${process.env.FRONTEND_URL}/sa/${request.id}" style="display:inline-block;background:#0E5F94;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">View Request</a>
+              </div>
+              <div style="padding:14px;text-align:center;color:#7A9AB8;font-size:12px;background:#e8f4fc">
+                OMIYE MFB Internal HelpDesk — Salary Advance System
+              </div>
+            </div>`
+        });
+      }
       await createNotifications(
         [request.initiator_id],
         `Your SA request ${request.request_number} has been ${newStatus}`,
