@@ -46,28 +46,32 @@ async function sendEmail(to, template) {
 }
 
 const emailTemplates = {
-  ticketCreated: (ticket, creator) => ({
+  ticketCreated: (ticket, creator, department) => {
+    const team = department === 'finance' ? 'Finance Team' : 'ICT Team';
+    const teamColor = department === 'finance' ? '#0FA86A' : '#0E5F94';
+    return {
     subject: `[OMIYE MFB HelpDesk] New Ticket ${ticket.ticket_number}: ${ticket.subject}`,
     html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-        <div style="background:#0E5F94;padding:20px;text-align:center">
+        <div style="background:${teamColor};padding:20px;text-align:center">
           <h1 style="color:#fff;margin:0;font-size:20px">OMIYE MFB HelpDesk</h1>
         </div>
         <div style="padding:24px;background:#f7fafd">
           <h2 style="color:#1A2940">New Ticket Submitted</h2>
-          <p>Hi ICT Team,</p>
+          <p>Hi ${team},</p>
           <p>A new support ticket has been lodged and requires your attention.</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0">
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold;width:140px">Ticket Number</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.ticket_number}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Subject</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.subject}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Department</td><td style="padding:8px;border:1px solid #d4e8f5;font-weight:bold;color:${teamColor}">${team}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Category</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.category}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Priority</td><td style="padding:8px;border:1px solid #d4e8f5;color:${ticket.priority==='critical'?'#D04040':ticket.priority==='high'?'#E8A020':'#1A2940'};font-weight:bold;text-transform:capitalize">${ticket.priority}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Branch</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.branch}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Submitted By</td><td style="padding:8px;border:1px solid #d4e8f5">${creator.full_name}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Date & Time</td><td style="padding:8px;border:1px solid #d4e8f5">${new Date(ticket.created_at).toLocaleString('en-NG')}</td></tr>
-            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">SLA Deadline</td><td style="padding:8px;border:1px solid #d4e8f5;color:#D04040;font-weight:bold">${new Date(ticket.sla_deadline).toLocaleString('en-NG')}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">SLA Deadline</td><td style="padding:8px;border:1px solid #d4e8f5;color:#D04040;font-weight:bold">${ticket.sla_deadline ? new Date(ticket.sla_deadline).toLocaleString('en-NG') : 'No SLA'}</td></tr>
           </table>
-          <div style="background:#fff;padding:12px;border-left:4px solid #1B8FD4;margin:16px 0">
+          <div style="background:#fff;padding:12px;border-left:4px solid ${teamColor};margin:16px 0">
             <strong>Description:</strong><br/>${ticket.description}
           </div>
           <a href="${process.env.FRONTEND_URL}/tickets/${ticket.id}" style="display:inline-block;background:#F4873A;color:#fff;padding:10px 22px;text-decoration:none;border-radius:6px;font-weight:bold">View & Respond to Ticket</a>
@@ -76,9 +80,12 @@ const emailTemplates = {
           OMIYE MFB Internal HelpDesk System — Do not reply to this email
         </div>
       </div>`,
-  }),
+    };
+  },
 
-  ticketConfirmation: (ticket, creator) => ({
+  ticketConfirmation: (ticket, creator, department) => {
+    const team = department === 'finance' ? 'Finance Team' : 'ICT team';
+    return {
     subject: `[OMIYE MFB HelpDesk] Your Ticket ${ticket.ticket_number} Has Been Received`,
     html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
@@ -88,22 +95,23 @@ const emailTemplates = {
         <div style="padding:24px;background:#f7fafd">
           <h2 style="color:#1A2940">Ticket Received ✅</h2>
           <p>Hi ${creator.full_name},</p>
-          <p>Your support ticket has been successfully submitted. The ICT team will attend to it based on priority.</p>
+          <p>Your support ticket has been successfully submitted. The ${team} will attend to it based on priority.</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0">
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold;width:140px">Ticket Number</td><td style="padding:8px;border:1px solid #d4e8f5;font-weight:bold;color:#0E5F94">${ticket.ticket_number}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Subject</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.subject}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Priority</td><td style="padding:8px;border:1px solid #d4e8f5;text-transform:capitalize">${ticket.priority}</td></tr>
             <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Status</td><td style="padding:8px;border:1px solid #d4e8f5">Pending</td></tr>
-            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">SLA Deadline</td><td style="padding:8px;border:1px solid #d4e8f5">${new Date(ticket.sla_deadline).toLocaleString('en-NG')}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">SLA Deadline</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.sla_deadline ? new Date(ticket.sla_deadline).toLocaleString('en-NG') : 'No SLA'}</td></tr>
           </table>
-          <p>You will receive an email update whenever the ICT team responds or changes the status of your ticket.</p>
+          <p>You will receive an email update whenever the ${team} responds or changes the status of your ticket.</p>
           <a href="${process.env.FRONTEND_URL}/tickets/${ticket.id}" style="display:inline-block;background:#1B8FD4;color:#fff;padding:10px 22px;text-decoration:none;border-radius:6px;font-weight:bold">Track Your Ticket</a>
         </div>
         <div style="padding:14px;text-align:center;color:#6B8CAE;font-size:12px;background:#e8f4fc">
           OMIYE MFB Internal HelpDesk System — Do not reply to this email
         </div>
       </div>`,
-  }),
+    };
+  },
 
   ticketUpdated: (ticket, updatedBy, action, comment) => ({
     subject: `[OMIYE MFB HelpDesk] Update on Ticket ${ticket.ticket_number}: ${ticket.subject}`,
@@ -186,7 +194,45 @@ const emailTemplates = {
       </div>`,
   }),
 
-  welcomeUser: (user, password) => ({
+  passwordResetByAdmin: (user, password, expiresAt) => ({
+    subject: `[OMIYE MFB HelpDesk] 🔑 Your Password Has Been Reset`,
+    html: `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+        <div style="background:#0E5F94;padding:20px;text-align:center">
+          <h1 style="color:#fff;margin:0;font-size:20px">OMIYE MFB HelpDesk</h1>
+        </div>
+        <div style="padding:24px;background:#f7fafd">
+          <h2 style="color:#1A2940">🔑 Password Reset by Administrator</h2>
+          <p>Hi ${user.full_name},</p>
+          <p>Your password on the OMIYE MFB HelpDesk has been reset by a System Administrator. Use the temporary credentials below to log in.</p>
+          <div style="background:#fff;border:2px solid #F4873A;border-radius:8px;padding:20px;margin:20px 0;text-align:center">
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Your Temporary Password</div>
+            <div style="font-size:24px;font-weight:800;color:#F4873A;letter-spacing:3px;font-family:monospace">${password}</div>
+          </div>
+          <div style="background:#FEF1E8;border-left:4px solid #F4873A;padding:12px;border-radius:4px;margin:16px 0">
+            <strong>⏰ This password expires at: ${expiresAt}</strong><br/>
+            You must log in and change your password before it expires.
+          </div>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0">
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold;width:140px">Website</td>
+                <td style="padding:8px;border:1px solid #d4e8f5"><a href="${process.env.FRONTEND_URL}" style="color:#0E5F94">${process.env.FRONTEND_URL}</a></td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Email</td>
+                <td style="padding:8px;border:1px solid #d4e8f5">${user.email}</td></tr>
+          </table>
+          <a href="${process.env.FRONTEND_URL}" style="display:inline-block;background:#1B8FD4;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">
+            🔐 Login Now
+          </a>
+          <p style="margin-top:20px;font-size:12px;color:#6B8CAE">
+            If you did not expect this reset, please contact your System Administrator immediately.
+          </p>
+        </div>
+        <div style="padding:14px;text-align:center;color:#6B8CAE;font-size:12px;background:#e8f4fc">
+          OMIYE MFB Internal HelpDesk System — Do not reply to this email
+        </div>
+      </div>`,
+  }),
+
+  welcomeUser: (user, password, expiresAt) => ({
     subject: `Welcome to OMIYE MFB HelpDesk — Your Login Details`,
     html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
@@ -195,15 +241,17 @@ const emailTemplates = {
         </div>
         <div style="padding:24px;background:#f7fafd">
           <h2 style="color:#1A2940">Welcome, ${user.full_name}! 👋</h2>
-          <p>Your account has been created on the OMIYE MFB Internal HelpDesk System. You can now log in using the details below.</p>
+          <p>Your account has been created on the OMIYE MFB Internal HelpDesk System. Use the credentials below to log in.</p>
+          <div style="background:#fff;border:2px solid #F4873A;border-radius:8px;padding:20px;margin:20px 0;text-align:center">
+            <div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Your Temporary Password</div>
+            <div style="font-size:24px;font-weight:800;color:#F4873A;letter-spacing:3px;font-family:monospace">${password}</div>
+          </div>
           <div style="background:#fff;border:1px solid #D4E8F5;border-radius:8px;padding:20px;margin:20px 0">
             <table style="width:100%;border-collapse:collapse">
               <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold;width:140px">Website</td>
                   <td style="padding:8px;border:1px solid #d4e8f5"><a href="${process.env.FRONTEND_URL}" style="color:#0E5F94">${process.env.FRONTEND_URL}</a></td></tr>
               <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Email</td>
                   <td style="padding:8px;border:1px solid #d4e8f5">${user.email}</td></tr>
-              <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Password</td>
-                  <td style="padding:8px;border:1px solid #d4e8f5;font-weight:bold;color:#F4873A">${password}</td></tr>
               <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Your Role</td>
                   <td style="padding:8px;border:1px solid #d4e8f5;text-transform:capitalize">${user.role.replace(/_/g,' ')}</td></tr>
               <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Branch</td>
@@ -211,7 +259,8 @@ const emailTemplates = {
             </table>
           </div>
           <div style="background:#FEF1E8;border-left:4px solid #F4873A;padding:12px;border-radius:4px;margin:16px 0">
-            <strong>⚠️ Important:</strong> Please change your password immediately after your first login for security purposes.
+            <strong>⏰ This password expires at: ${expiresAt}</strong><br/>
+            You must log in and change your password before it expires. Contact your System Administrator if it expires before you log in.
           </div>
           <a href="${process.env.FRONTEND_URL}" style="display:inline-block;background:#1B8FD4;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;margin-top:8px">
             🔐 Login to HelpDesk
