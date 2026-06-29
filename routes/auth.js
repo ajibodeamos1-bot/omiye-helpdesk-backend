@@ -25,6 +25,16 @@ router.post('/login', [
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ message: 'Invalid email or password' });
 
+    // Check if temporary password has expired
+    if (user.password_expires_at && user.must_change_password) {
+      if (new Date() > new Date(user.password_expires_at)) {
+        return res.status(401).json({
+          message: 'Your temporary password has expired. Please contact your System Administrator to reset it.',
+          expired: true
+        });
+      }
+    }
+
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
     await pool.query(
       'INSERT INTO login_history (user_id, ip_address) VALUES ($1, $2)',
@@ -101,7 +111,7 @@ router.put('/change-password', auth, [
     if (sameAsNew) return res.status(400).json({ message: 'New password cannot be the same as your current password' });
 
     const new_hash = await bcrypt.hash(new_password, 10);
-    await pool.query('UPDATE users SET password_hash = $1, must_change_password = false WHERE id = $2', [new_hash, req.user.id]);
+    await pool.query('UPDATE users SET password_hash = $1, must_change_password = false, password_expires_at = NULL WHERE id = $2', [new_hash, req.user.id]);
     res.json({ message: 'Password updated successfully' });
   } catch (err) { res.status(500).json({ message: 'Server error' }); }
 });
