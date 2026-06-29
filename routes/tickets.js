@@ -127,8 +127,8 @@ router.post('/', auth, requireRole('care_rep', 'ict_staff', 'ict_manager', 'fina
     const deptRole = department === 'finance' ? "'finance_officer'" : "'ict_staff','ict_manager'";
     const staffResult = await pool.query(`SELECT id, email FROM users WHERE role IN (${deptRole}) AND is_active = true`);
     const staffIds = staffResult.rows.map(u => u.id);
-    for (const u of staffResult.rows) sendEmail(u.email, emailTemplates.ticketCreated(ticket, creator));
-    sendEmail(creator.email, emailTemplates.ticketConfirmation(ticket, creator));
+    for (const u of staffResult.rows) sendEmail(u.email, emailTemplates.ticketCreated(ticket, creator, department));
+    sendEmail(creator.email, emailTemplates.ticketConfirmation(ticket, creator, department));
 
     // Notify all relevant staff about new ticket
     await createNotifications(
