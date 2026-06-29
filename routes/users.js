@@ -70,9 +70,10 @@ router.post('/', auth, requireRole('super_admin'), async (req, res) => {
     const exists = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (exists.rows.length) return res.status(409).json({ message: 'Email already registered' });
     const password_hash = await bcrypt.hash(password, 10);
+    const expiresAt = new Date(Date.now() + 20 * 60 * 1000); // 20 minutes
     const result = await pool.query(
-      'INSERT INTO users (full_name, email, password_hash, role, branch, must_change_password, assigned_approver_id) VALUES ($1,$2,$3,$4,$5,true,$6) RETURNING id, full_name, email, role, branch',
-      [full_name, email, password_hash, role, branch, assigned_approver_id || null]
+      'INSERT INTO users (full_name, email, password_hash, role, branch, must_change_password, assigned_approver_id, password_expires_at) VALUES ($1,$2,$3,$4,$5,true,$6,$7) RETURNING id, full_name, email, role, branch',
+      [full_name, email, password_hash, role, branch, assigned_approver_id || null, expiresAt]
     );
     const newUser = result.rows[0];
     await pool.query(
@@ -80,7 +81,8 @@ router.post('/', auth, requireRole('super_admin'), async (req, res) => {
       [req.user.id, `User created: ${full_name} (${role})`, email]
     ).catch(() => {});
     const { sendEmail, emailTemplates } = require('../emailService');
-    sendEmail(newUser.email, emailTemplates.welcomeUser(newUser, password));
+    const expiresAtFormatted = expiresAt.toLocaleString('en-NG', { timeZone: 'Africa/Lagos' });
+    sendEmail(newUser.email, emailTemplates.welcomeUser(newUser, password, expiresAtFormatted));
     res.status(201).json({ message: 'User created', user: newUser });
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
@@ -126,14 +128,24 @@ router.post('/:id/reset-password', auth, requireRole('super_admin'), async (req,
   if (!new_password || new_password.length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters' });
   try {
     const hash = await bcrypt.hash(new_password, 10);
-    await pool.query('UPDATE users SET password_hash=$1, must_change_password=true WHERE id=$2', [hash, req.params.id]);
-    const target = await pool.query('SELECT full_name FROM users WHERE id=$1', [req.params.id]);
+    const expiresAt = new Date(Date.now() + 20 * 60 * 1000); // 20 minutes from now
+    await pool.query(
+      'UPDATE users SET password_hash=$1, must_change_password=true, password_expires_at=$2 WHERE id=$3',
+      [hash, expiresAt, req.params.id]
+    );
+    const target = await pool.query('SELECT full_name, email FROM users WHERE id=$1', [req.params.id]);
+    const user = target.rows[0];
+    if (user) {
+      const { sendEmail, emailTemplates } = require('../emailService');
+      const expiresAtFormatted = expiresAt.toLocaleString('en-NG', { timeZone: 'Africa/Lagos' });
+      sendEmail(user.email, emailTemplates.passwordResetByAdmin(user, new_password, expiresAtFormatted));
+    }
     await pool.query(
       'INSERT INTO audit_logs (user_id, action) VALUES ($1,$2)',
-      [req.user.id, `Password reset for: ${target.rows[0]?.full_name || req.params.id}`]
+      [req.user.id, `Password reset for: ${user?.full_name || req.params.id}`]
     ).catch(() => {});
-    res.json({ message: 'Password reset successfully' });
-  } catch (err) { res.status(500).json({ message: 'Server error' }); }
+    res.json({ message: 'Password reset successfully. User has been notified by email.' });
+  } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
 
 module.exports = router;
