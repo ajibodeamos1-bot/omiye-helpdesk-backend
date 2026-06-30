@@ -140,26 +140,26 @@ const emailTemplates = {
       </div>`,
   }),
 
-  ticketEscalated: (ticket, updater, comment) => ({
-    subject: `🚨 ESCALATED — Ticket ${ticket.ticket_number} requires urgent attention`,
+  ticketAssigned: (ticket, assignee, assigner) => ({
+    subject: `[OMIYE MFB HelpDesk] 📋 Ticket ${ticket.ticket_number} Assigned to You`,
     html: `
       <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-        <div style="background:#D63A3A;padding:20px;text-align:center">
-          <h1 style="color:#fff;margin:0;font-size:20px">🚨 Ticket Escalated</h1>
+        <div style="background:#1B8FD4;padding:20px;text-align:center">
+          <h1 style="color:#fff;margin:0;font-size:20px">📋 New Ticket Assignment</h1>
         </div>
         <div style="padding:24px;background:#f7fafd">
-          <p>Hi,</p>
-          <p>A support ticket has been <strong style="color:#D63A3A">ESCALATED</strong> by ${updater.full_name} and requires urgent management attention.</p>
+          <p>Hi ${assignee.full_name},</p>
+          <p><strong>${assigner?.full_name || 'A manager'}</strong> has assigned a ticket to you. Please review and attend to it.</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0">
-            <tr><td style="padding:8px;background:#FDEAEA;font-weight:bold;width:140px">Ticket Number</td><td style="padding:8px;border:1px solid #F5D4D4;font-weight:bold;color:#D63A3A">${ticket.ticket_number}</td></tr>
-            <tr><td style="padding:8px;background:#FDEAEA;font-weight:bold">Subject</td><td style="padding:8px;border:1px solid #F5D4D4">${ticket.subject}</td></tr>
-            <tr><td style="padding:8px;background:#FDEAEA;font-weight:bold">Branch</td><td style="padding:8px;border:1px solid #F5D4D4">${ticket.branch}</td></tr>
-            <tr><td style="padding:8px;background:#FDEAEA;font-weight:bold">Priority</td><td style="padding:8px;border:1px solid #F5D4D4;text-transform:capitalize">${ticket.priority}</td></tr>
-            <tr><td style="padding:8px;background:#FDEAEA;font-weight:bold">Escalated By</td><td style="padding:8px;border:1px solid #F5D4D4">${updater.full_name}</td></tr>
-            <tr><td style="padding:8px;background:#FDEAEA;font-weight:bold">SLA Deadline</td><td style="padding:8px;border:1px solid #F5D4D4;color:#D63A3A;font-weight:bold">${ticket.sla_deadline ? new Date(ticket.sla_deadline).toLocaleString('en-NG') : 'No SLA'}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold;width:140px">Ticket Number</td><td style="padding:8px;border:1px solid #d4e8f5;font-weight:bold;color:#0E5F94">${ticket.ticket_number}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Subject</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.subject}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Category</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.category}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Priority</td><td style="padding:8px;border:1px solid #d4e8f5;color:${ticket.priority==='critical'?'#D04040':ticket.priority==='high'?'#E8A020':'#1A2940'};font-weight:bold;text-transform:capitalize">${ticket.priority}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Branch</td><td style="padding:8px;border:1px solid #d4e8f5">${ticket.branch}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">Status</td><td style="padding:8px;border:1px solid #d4e8f5;text-transform:capitalize">${ticket.status.replace('_',' ')}</td></tr>
+            <tr><td style="padding:8px;background:#e8f4fc;font-weight:bold">SLA Deadline</td><td style="padding:8px;border:1px solid #d4e8f5;color:#D04040;font-weight:bold">${ticket.sla_deadline ? new Date(ticket.sla_deadline).toLocaleString('en-NG') : 'No SLA'}</td></tr>
           </table>
-          ${comment ? `<div style="background:#fff;padding:12px;border-left:4px solid #D63A3A;margin:16px 0"><strong>Note from ${updater.full_name}:</strong><br/>${comment}</div>` : ''}
-          <a href="${process.env.FRONTEND_URL}/tickets/${ticket.id}" style="display:inline-block;background:#D63A3A;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">View Escalated Ticket</a>
+          <a href="${process.env.FRONTEND_URL}/tickets/${ticket.id}" style="display:inline-block;background:#1B8FD4;color:#fff;padding:10px 22px;text-decoration:none;border-radius:6px;font-weight:bold">View & Respond to Ticket</a>
         </div>
         <div style="padding:14px;text-align:center;color:#6B8CAE;font-size:12px;background:#e8f4fc">
           OMIYE MFB Internal HelpDesk System — Do not reply to this email
