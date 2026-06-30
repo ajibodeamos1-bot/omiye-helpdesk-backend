@@ -154,11 +154,12 @@ router.get('/stats/dashboard', auth, async (req, res) => {
     else if (req.user.role === 'branch_manager') { filter = 'WHERE branch = $1'; params = [req.user.branch]; }
     else if (req.user.role === 'ict_staff') { filter = "WHERE (assigned_to = $1 OR department = 'ict' OR department IS NULL)"; params = [req.user.id]; }
 
-    const [open, inprog, resolvedToday, slaBreach, byStatus, byPriority, byCategory] = await Promise.all([
+    const [open, inprog, resolvedToday, slaBreach, escalated, byStatus, byPriority, byCategory] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status NOT IN ('resolved','closed')" : "WHERE status NOT IN ('resolved','closed')"}`, params),
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'in_progress'" : "WHERE status = 'in_progress'"}`, params),
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'resolved' AND resolved_at >= CURRENT_DATE" : "WHERE status = 'resolved' AND resolved_at >= CURRENT_DATE"}`, params),
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND sla_deadline < NOW() AND status NOT IN ('resolved','closed')" : "WHERE sla_deadline < NOW() AND status NOT IN ('resolved','closed')"}`, params),
+      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'escalated'" : "WHERE status = 'escalated'"}`, params),
       pool.query(`SELECT status, COUNT(*) as count FROM tickets ${filter} GROUP BY status`, params),
       pool.query(`SELECT priority, COUNT(*) as count FROM tickets ${filter} GROUP BY priority`, params),
       pool.query(`SELECT category, COUNT(*) as count FROM tickets ${filter} GROUP BY category ORDER BY count DESC LIMIT 6`, params),
@@ -169,6 +170,7 @@ router.get('/stats/dashboard', auth, async (req, res) => {
       in_progress: parseInt(inprog.rows[0].count),
       resolved_today: parseInt(resolvedToday.rows[0].count),
       sla_breached: parseInt(slaBreach.rows[0].count),
+      escalated: parseInt(escalated.rows[0].count),
       by_status: byStatus.rows,
       by_priority: byPriority.rows,
       by_category: byCategory.rows,
@@ -307,6 +309,31 @@ router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'finance_office
         await createNotifications(
           [old.created_by],
           `Your ticket ${updatedTicket.ticket_number} status changed to: ${status.replace(/_/g,' ')}`,
+          'ticket_update', req.params.id
+        );
+      }
+
+      // ── Escalation alert — notify management ─────────────────────────
+      if (status === 'escalated') {
+        const mgmtRoles = updatedTicket.department === 'finance'
+          ? "'ict_manager','super_admin'"
+          : "'ict_manager','super_admin'";
+        const mgmtResult = await pool.query(
+          `SELECT id, full_name, email FROM users WHERE role IN (${mgmtRoles}) AND is_active = true`
+        );
+        const bmResult = await pool.query(
+          "SELECT id, full_name, email FROM users WHERE role = 'branch_manager' AND branch = $1 AND is_active = true",
+          [updatedTicket.branch]
+        );
+        const recipients = [...mgmtResult.rows, ...bmResult.rows];
+        const recipientIds = recipients.map(r => r.id);
+
+        for (const r of recipients) {
+          sendEmail(r.email, emailTemplates.ticketEscalated(updatedTicket, updater, comment));
+        }
+        await createNotifications(
+          recipientIds,
+          `🚨 Ticket ${updatedTicket.ticket_number} has been ESCALATED — requires urgent attention`,
           'ticket_update', req.params.id
         );
       }
