@@ -45,7 +45,7 @@ async function generateTicketNumber() {
 // GET /api/tickets
 router.get('/', auth, async (req, res) => {
   try {
-    const { status, priority, category, branch, search, department, page = 1, limit = 20 } = req.query;
+    const { status, priority, category, branch, search, department, assigned_to_me, page = 1, limit = 20 } = req.query;
     const offset = (page - 1) * limit;
     let where = [], params = [], idx = 1;
 
@@ -59,6 +59,7 @@ router.get('/', auth, async (req, res) => {
       where.push(`t.branch = $${idx++}`); params.push(req.user.branch);
     }
 
+    if (assigned_to_me === 'true') { where.push(`t.assigned_to = $${idx++}`); params.push(req.user.id); }
     if (status) { where.push(`t.status = $${idx++}`); params.push(status); }
     if (priority) { where.push(`t.priority = $${idx++}`); params.push(priority); }
     if (category) { where.push(`t.category = $${idx++}`); params.push(category); }
@@ -154,12 +155,12 @@ router.get('/stats/dashboard', auth, async (req, res) => {
     else if (req.user.role === 'branch_manager') { filter = 'WHERE branch = $1'; params = [req.user.branch]; }
     else if (req.user.role === 'ict_staff') { filter = "WHERE (assigned_to = $1 OR department = 'ict' OR department IS NULL)"; params = [req.user.id]; }
 
-    const [open, inprog, resolvedToday, slaBreach, escalated, byStatus, byPriority, byCategory] = await Promise.all([
+    const [open, inprog, resolvedToday, slaBreach, assignedToMe, byStatus, byPriority, byCategory] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status NOT IN ('resolved','closed')" : "WHERE status NOT IN ('resolved','closed')"}`, params),
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'in_progress'" : "WHERE status = 'in_progress'"}`, params),
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'resolved' AND resolved_at >= CURRENT_DATE" : "WHERE status = 'resolved' AND resolved_at >= CURRENT_DATE"}`, params),
       pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND sla_deadline < NOW() AND status NOT IN ('resolved','closed')" : "WHERE sla_deadline < NOW() AND status NOT IN ('resolved','closed')"}`, params),
-      pool.query(`SELECT COUNT(*) FROM tickets ${filter ? filter + " AND status = 'escalated'" : "WHERE status = 'escalated'"}`, params),
+      pool.query(`SELECT COUNT(*) FROM tickets WHERE assigned_to = $1 AND status NOT IN ('resolved','closed')`, [req.user.id]),
       pool.query(`SELECT status, COUNT(*) as count FROM tickets ${filter} GROUP BY status`, params),
       pool.query(`SELECT priority, COUNT(*) as count FROM tickets ${filter} GROUP BY priority`, params),
       pool.query(`SELECT category, COUNT(*) as count FROM tickets ${filter} GROUP BY category ORDER BY count DESC LIMIT 6`, params),
@@ -170,7 +171,7 @@ router.get('/stats/dashboard', auth, async (req, res) => {
       in_progress: parseInt(inprog.rows[0].count),
       resolved_today: parseInt(resolvedToday.rows[0].count),
       sla_breached: parseInt(slaBreach.rows[0].count),
-      escalated: parseInt(escalated.rows[0].count),
+      assigned_to_me: parseInt(assignedToMe.rows[0].count),
       by_status: byStatus.rows,
       by_priority: byPriority.rows,
       by_category: byCategory.rows,
@@ -312,35 +313,18 @@ router.put('/:id', auth, requireRole('ict_staff', 'ict_manager', 'finance_office
           'ticket_update', req.params.id
         );
       }
-
-      // ── Escalation alert — notify management ─────────────────────────
-      if (status === 'escalated') {
-        const mgmtRoles = updatedTicket.department === 'finance'
-          ? "'ict_manager','super_admin'"
-          : "'ict_manager','super_admin'";
-        const mgmtResult = await pool.query(
-          `SELECT id, full_name, email FROM users WHERE role IN (${mgmtRoles}) AND is_active = true`
-        );
-        const bmResult = await pool.query(
-          "SELECT id, full_name, email FROM users WHERE role = 'branch_manager' AND branch = $1 AND is_active = true",
-          [updatedTicket.branch]
-        );
-        const recipients = [...mgmtResult.rows, ...bmResult.rows];
-        const recipientIds = recipients.map(r => r.id);
-
-        for (const r of recipients) {
-          sendEmail(r.email, emailTemplates.ticketEscalated(updatedTicket, updater, comment));
-        }
-        await createNotifications(
-          recipientIds,
-          `🚨 Ticket ${updatedTicket.ticket_number} has been ESCALATED — requires urgent attention`,
-          'ticket_update', req.params.id
-        );
-      }
     }
 
-    // Notify newly assigned staff
+    // Notify newly assigned staff — email + in-app
     if (assigned_to && assigned_to !== old.assigned_to) {
+      const assigneeResult = await pool.query('SELECT full_name, email FROM users WHERE id = $1', [assigned_to]);
+      const assignee = assigneeResult.rows[0];
+      const assignerResult = await pool.query('SELECT full_name FROM users WHERE id = $1', [req.user.id]);
+      const assigner = assignerResult.rows[0];
+
+      if (assignee) {
+        sendEmail(assignee.email, emailTemplates.ticketAssigned(updatedTicket, assignee, assigner));
+      }
       await createNotifications(
         [assigned_to],
         `Ticket ${updatedTicket.ticket_number} has been assigned to you`,
