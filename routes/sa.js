@@ -81,13 +81,14 @@ router.get('/stats', auth, async (req, res) => {
     else if (req.user.role === 'branch_manager') { filter = 'WHERE branch = $1'; params = [req.user.branch]; }
 
     const f = (extra) => filter ? filter + ` AND ${extra}` : `WHERE ${extra}`;
-    const [total, pending, approved, declined, under_review, bm_recommended] = await Promise.all([
+    const [total, pending, approved, declined, under_review, bm_recommended, bm_declined] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM sa_requests ${filter}`, params),
       pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='pending'")}`, params),
       pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='approved'")}`, params),
       pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='declined'")}`, params),
       pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='under_review'")}`, params),
       pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='bm_recommended'")}`, params),
+      pool.query(`SELECT COUNT(*) FROM sa_requests ${f("status='bm_declined'")}`, params),
     ]);
 
     res.json({
@@ -97,6 +98,7 @@ router.get('/stats', auth, async (req, res) => {
       declined: parseInt(declined.rows[0].count),
       under_review: parseInt(under_review.rows[0].count),
       bm_recommended: parseInt(bm_recommended.rows[0].count),
+      bm_declined: parseInt(bm_declined.rows[0].count),
     });
   } catch (err) { console.error(err); res.status(500).json({ message: 'Server error' }); }
 });
@@ -280,32 +282,69 @@ router.put('/:id', auth, requireRole('sa_approver', 'ict_manager', 'super_admin'
     const request = prev.rows[0];
 
     // ── Branch Manager recommends ──────────────────────────────────────
-    if (action === 'bm_recommend') {
-      if (req.user.role !== 'branch_manager') return res.status(403).json({ message: 'Only Branch Managers can recommend' });
+    if (action === 'bm_recommend' || action === 'bm_decline') {
+      if (req.user.role !== 'branch_manager') return res.status(403).json({ message: 'Only Branch Managers can perform this action' });
       if (request.branch !== req.user.branch) return res.status(403).json({ message: 'Access denied' });
-      if (!bm_recommended_amount) return res.status(400).json({ message: 'Please enter the recommended amount' });
+
+      if (action === 'bm_recommend' && !bm_recommended_amount) {
+        return res.status(400).json({ message: 'Please enter the recommended amount' });
+      }
+
+      const newBmStatus = action === 'bm_decline' ? 'bm_declined' : 'bm_recommended';
 
       await client.query(`
         UPDATE sa_requests SET
-          status = 'bm_recommended',
-          bm_id = $1,
-          bm_recommended_amount = $2,
-          bm_notes = $3,
+          status = $1,
+          bm_id = $2,
+          bm_recommended_amount = $3,
+          bm_notes = $4,
           bm_recommended_at = NOW(),
           updated_at = NOW()
-        WHERE id = $4
-      `, [req.user.id, parseFloat(bm_recommended_amount), bm_notes || null, req.params.id]);
+        WHERE id = $5
+      `, [newBmStatus, req.user.id, action === 'bm_recommend' ? parseFloat(bm_recommended_amount) : null, bm_notes || null, req.params.id]);
 
       await client.query(
         'INSERT INTO sa_audit_logs (request_id, user_id, action, old_value, new_value) VALUES ($1,$2,$3,$4,$5)',
-        [req.params.id, req.user.id, 'Branch Manager recommended', request.status, 'bm_recommended']
+        [req.params.id, req.user.id, action === 'bm_decline' ? 'Branch Manager declined' : 'Branch Manager recommended', request.status, newBmStatus]
       );
       await client.query('COMMIT');
 
-      // Notify the assigned approver
+      const bmName = req.user.full_name || 'Branch Manager';
+
+      // ── BM declines — notify initiator directly, skip approver ────────
+      if (action === 'bm_decline') {
+        if (request.initiator_email) {
+          sendEmail(request.initiator_email, {
+            subject: `❌ Declined by Branch Manager — SA Request ${request.request_number}`,
+            html: `
+              <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+                <div style="background:#D63A3A;padding:20px;text-align:center">
+                  <h1 style="color:#fff;margin:0;font-size:20px">❌ Request Declined by Branch Manager</h1>
+                </div>
+                <div style="padding:24px;background:#f7fafd">
+                  <p>Hi ${request.initiator_name},</p>
+                  <p>Your request <strong>${request.request_number}</strong> has been declined by your Branch Manager, <strong>${bmName}</strong>, and will not proceed to the approver.</p>
+                  ${bm_notes ? `<p><strong>Reason:</strong> ${bm_notes}</p>` : ''}
+                  <p>You may resubmit your request if you wish to appeal.</p>
+                  <a href="${process.env.FRONTEND_URL}/sa/${request.id}" style="display:inline-block;background:#0E5F94;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold">View Request</a>
+                </div>
+                <div style="padding:14px;text-align:center;color:#7A9AB8;font-size:12px;background:#e8f4fc">
+                  OMIYE MFB Internal HelpDesk — Salary Advance System
+                </div>
+              </div>`
+          });
+        }
+        await createNotifications(
+          [request.initiator_id],
+          `Your SA request ${request.request_number} was declined by your Branch Manager`,
+          'sa_update', null, req.params.id
+        );
+        return res.json({ message: 'Request declined. Initiator has been notified.' });
+      }
+
+      // ── BM recommends — notify approver ────────────────────────────────
       const approverResult = await pool.query('SELECT full_name, email, id FROM users WHERE id = $1', [request.approver_id]);
       const approver = approverResult.rows[0];
-      const bmName = req.user.full_name || 'Branch Manager';
 
       if (approver) {
         sendEmail(approver.email, {
