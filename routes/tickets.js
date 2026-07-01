@@ -60,10 +60,12 @@ router.get('/', auth, async (req, res) => {
     }
 
     if (assigned_to_me === 'true') { where.push(`t.assigned_to = $${idx++}`); params.push(req.user.id); }
-    if (status) { where.push(`t.status = $${idx++}`); params.push(status); }
-    if (priority) { where.push(`t.priority = $${idx++}`); params.push(priority); }
-    if (category) { where.push(`t.category = $${idx++}`); params.push(category); }
-    if (department) { where.push(`t.department = $${idx++}`); params.push(department); }
+    if (status)    { where.push(`t.status = $${idx++}`);   params.push(status); }
+    if (priority)  { where.push(`t.priority = $${idx++}`); params.push(priority); }
+    if (category)  { where.push(`t.category = $${idx++}`); params.push(category); }
+    if (department){ where.push(`t.department = $${idx++}`); params.push(department); }
+    if (req.query.date_from) { where.push(`t.created_at >= $${idx++}`); params.push(req.query.date_from); }
+    if (req.query.date_to)   { where.push(`t.created_at <= $${idx++}`); params.push(req.query.date_to + ' 23:59:59'); }
     if (search) {
       where.push(`(t.subject ILIKE $${idx} OR t.ticket_number ILIKE $${idx} OR t.description ILIKE $${idx})`);
       params.push(`%${search}%`); idx++;
